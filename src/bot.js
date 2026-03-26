@@ -794,8 +794,18 @@ const ibftState = new Map();
           const msg = e.response?.data?.errorMessage || e.message;
           await ctx.reply(`Lỗi chi hộ: ${msg}`, menuKeyboard(ctx));
           try {
-            const rb = JSON.stringify(e._debug?.decodedRequest || {}, null, 2);
-            const rs = JSON.stringify(e._debug?.response || {}, null, 2);
+            const fallbackReq = {
+              requestId: 'AUTO',
+              merchantId: process.env.HPAY_MERCHANT_ID || '',
+              bankCode: ibft.bankCode,
+              accountNumber: ibft.accountNumber,
+              accountName: ibft.accountName,
+              amount,
+              remark,
+              callbackUrl: process.env.IBFT_CALLBACK_URL || '',
+            };
+            const rb = JSON.stringify(e._debug?.decodedRequest || fallbackReq, null, 2);
+            const rs = JSON.stringify(e._debug?.response || e.response?.data || {}, null, 2);
             if (rb || rs) {
               await ctx.replyWithMarkdown(
                 `*Request body (IBFT):*\n\`\`\`json\n${rb}\n\`\`\`\n*Response body (IBFT):*\n\`\`\`json\n${rs}\n\`\`\``,
