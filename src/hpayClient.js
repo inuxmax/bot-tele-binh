@@ -109,7 +109,16 @@ async function createVirtualAccount({ requestId, vaName, vaType = '1', vaConditi
       decoded = JSON.parse(buf.toString('utf8'));
     }
   } catch (_) {}
-  return { raw: resData, decoded, requestId: payload.requestId };
+  const debug = {
+    request: {
+      url,
+      body,
+    },
+    decodedRequest: payload,
+    response: resData,
+    decodedResponse: decoded,
+  };
+  return { raw: resData, decoded, requestId: payload.requestId, debug };
 }
 
 async function getAccountBalance({ requestId } = {}) {
@@ -166,7 +175,92 @@ async function getAccountBalance({ requestId } = {}) {
   return { raw: resData, decoded, requestId: payload.requestId };
 }
 
+async function createIBFT({ requestId, bankCode, accountNumber, accountName, amount, remark, callbackUrl }) {
+  const baseUrl = process.env.HPAY_BASE_URL || 'https://openapi-sandbox.htpgroup.com.vn';
+  const path = process.env.HPAY_IBFT_PATH || '/service/firm/v1/transfer';
+  const url = `${baseUrl}${path}`;
+  const merchantId = process.env.HPAY_MERCHANT_ID || '';
+  const passcode = process.env.HPAY_PASSCODE || '';
+  const privateKey = readPrivateKey();
+  if (!privateKey) throw new Error('Không tìm thấy private key');
+  try { crypto.createPrivateKey({ key: privateKey, format: 'pem' }); } catch (_) { throw new Error('Private key không hợp lệ (PEM)'); }
+  const payload = {
+    requestId: requestId || makeRequestId(),
+    merchantId,
+    bankCode,
+    accountNumber,
+    accountName,
+    amount: String(amount),
+  };
+  if (remark && remark.trim() !== '') payload.remark = remark.trim();
+  if (callbackUrl && callbackUrl.trim() !== '') payload.callbackUrl = callbackUrl.trim();
+  const data = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64');
+  let signature = '';
+  if (privateKey && passcode) {
+    const message = `${data}|${passcode}`;
+    signature = signRSASHA256(message, privateKey);
+  }
+  if (!signature) throw new Error('Thiếu chữ ký');
+  let authHeader = '';
+  const tokenResp = await getAccessToken(process.env.HPAY_FIRM_SCOPE || 'firm');
+  if (tokenResp && tokenResp.access_token) authHeader = `Bearer ${tokenResp.access_token}`;
+  if (!authHeader) throw new Error('Không lấy được token cho scope chi hộ');
+  const headers = buildHeaders(authHeader);
+  const body = { data, signature };
+  const res = await axios.post(url, body, { headers, timeout: 20000 });
+  const resData = res.data || {};
+  let decoded = null;
+  try {
+    if (resData.data) {
+      const buf = Buffer.from(resData.data, 'base64');
+      decoded = JSON.parse(buf.toString('utf8'));
+    }
+  } catch (_) {}
+  const debug = {
+    request: { url, body },
+    decodedRequest: payload,
+    response: resData,
+    decodedResponse: decoded,
+  };
+  return { raw: resData, decoded, requestId: payload.requestId, debug };
+}
+
+async function getIBFTStatus({ requestId, orderId }) {
+  const baseUrl = process.env.HPAY_BASE_URL || 'https://openapi-sandbox.htpgroup.com.vn';
+  const path = process.env.HPAY_IBFT_STATUS_PATH || '/service/firm/v1/get-status';
+  const url = `${baseUrl}${path}`;
+  const merchantId = process.env.HPAY_MERCHANT_ID || '';
+  const passcode = process.env.HPAY_PASSCODE || '';
+  const privateKey = readPrivateKey();
+  if (!privateKey) throw new Error('Không tìm thấy private key');
+  try { crypto.createPrivateKey({ key: privateKey, format: 'pem' }); } catch (_) { throw new Error('Private key không hợp lệ (PEM)'); }
+  const payload = { requestId: requestId || makeRequestId(), merchantId };
+  if (orderId) payload.orderId = orderId;
+  const data = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64');
+  const message = `${data}|${passcode}`;
+  const signature = signRSASHA256(message, privateKey);
+  let authHeader = '';
+  try {
+    const tokenResp = await getAccessToken(process.env.HPAY_FIRM_SCOPE || 'firm');
+    if (tokenResp && tokenResp.access_token) authHeader = `Bearer ${tokenResp.access_token}`;
+  } catch (_) {}
+  const headers = buildHeaders(authHeader);
+  const body = { data, signature };
+  const res = await axios.post(url, body, { headers, timeout: 20000 });
+  const resData = res.data || {};
+  let decoded = null;
+  try {
+    if (resData.data) {
+      const buf = Buffer.from(resData.data, 'base64');
+      decoded = JSON.parse(buf.toString('utf8'));
+    }
+  } catch (_) {}
+  return { raw: resData, decoded, requestId: payload.requestId };
+}
+
 module.exports = {
   createVirtualAccount,
   getAccountBalance,
+  createIBFT,
+  getIBFTStatus,
 }

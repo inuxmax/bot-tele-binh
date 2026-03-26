@@ -12,7 +12,6 @@ const awaitingName = new Map();
 const requestToChat = new Map();
 const requestStatus = new Map();
 const awaitingStatus = new Map();
-const awaitingCustomer = new Map();
 const withdrawState = new Map();
 
 function isAdminId(id) {
@@ -33,7 +32,8 @@ function menuKeyboard(ctx) {
       ['🎲 Random tên', '✍️ Nhập tên'],
       ['🔎 Trạng thái', '💸 Rút tiền', '🗂 VA đã tạo'],
       ['ℹ️ Thông tin', '📋 DS rút', '🔄 Cập nhật rút'],
-      ['⚙️ Quản lý', '🔑 Lấy token', '💰 Số dư']
+      ['⚙️ Quản lý', '🔑 Lấy token', '💰 Số dư'],
+      ['🏧 Chi hộ']
     ]).resize();
   }
   return Markup.keyboard([
@@ -44,7 +44,7 @@ function menuKeyboard(ctx) {
 }
 
 function isMenuText(t) {
-  return t === '🎲 Random tên' || t === '✍️ Nhập tên' || t === '🔑 Lấy token' || t === '💰 Số dư' || t === '🔎 Trạng thái' || t === '💸 Rút tiền' || t === '📋 DS rút' || t === '🔄 Cập nhật rút' || t === '⚙️ Quản lý' || t === '🗂 VA đã tạo' || t === 'ℹ️ Thông tin' || t === '🏦 Bank' || t === '🪙 USDT' || t === 'Đã rút' || t === 'Chưa rút' || t === 'Từ chối' || t === 'Rút ALL' || t === '✅ Xác nhận tạo' || t === '❌ Hủy' || t === '/menu' || t === '/start' || t === '👨 Nam' || t === '👩 Nữ';
+  return t === '🎲 Random tên' || t === '✍️ Nhập tên' || t === '🔑 Lấy token' || t === '💰 Số dư' || t === '🔎 Trạng thái' || t === '💸 Rút tiền' || t === '📋 DS rút' || t === '🔄 Cập nhật rút' || t === '⚙️ Quản lý' || t === '🗂 VA đã tạo' || t === 'ℹ️ Thông tin' || t === '🏦 Bank' || t === '🪙 USDT' || t === 'Đã rút' || t === 'Chưa rút' || t === 'Từ chối' || t === 'Rút ALL' || t === '✅ Xác nhận tạo' || t === '❌ Hủy' || t === '/menu' || t === '/start' || t === '🏧 Chi hộ';
 }
 
 const app = express();
@@ -135,6 +135,10 @@ app.get('/va/callback', async (req, res) => {
   res.status(200).json({ error: ok ? '00' : '01', message: ok ? 'Success' : 'Invalid secure_code' });
 });
 
+app.get('/ibft/callback', async (req, res) => {
+  res.status(200).json({ error: '00', message: 'Success' });
+});
+
 const desiredPort = process.env.PORT || process.env.CALLBACK_PORT || 3000;
 let callbackPort = desiredPort;
 
@@ -191,7 +195,7 @@ if (!bot) {
     remark = remark.slice(0, 50);
     await ctx.reply(`Đang tạo VA cho: ${safeName} ...`);
     try {
-      const { decoded, raw } = await createVirtualAccount({
+      const { decoded, raw, debug } = await createVirtualAccount({
         requestId,
         vaName: apiName,
         vaType: '1',
@@ -248,8 +252,12 @@ if (!bot) {
         } else if (decoded.qrCode) {
           await ctx.reply(`QR Code:\n${decoded.qrCode}`);
         }
-        awaitingCustomer.set(ctx.from.id, requestId);
-        await ctx.reply('Nhập tên khách hàng để lưu thông tin:');
+        const rb = JSON.stringify(debug?.decodedRequest || {}, null, 2);
+        const rs = JSON.stringify(debug?.decodedResponse || debug?.response || {}, null, 2);
+        await ctx.replyWithMarkdown(
+          `*Request body:*\n\`\`\`json\n${rb}\n\`\`\`\n*Response body:*\n\`\`\`json\n${rs}\n\`\`\``,
+          menuKeyboard(ctx)
+        );
       } else {
         await ctx.reply(`Tạo VA không thành công.\nMã lỗi: ${raw.errorCode || 'N/A'}\nThông tin: ${raw.errorMessage || 'N/A'}`, menuKeyboard());
       }
@@ -280,7 +288,7 @@ if (!bot) {
   const MAIN_MENU_CMDS = [
     '🎲 Random tên', '✍️ Nhập tên', '🔑 Lấy token', '💰 Số dư', '🔎 Trạng thái', 
     '💸 Rút tiền', '📋 DS rút', '🔄 Cập nhật rút', '⚙️ Quản lý', '🗂 VA đã tạo', 
-    'ℹ️ Thông tin', '/menu', '/start'
+    'ℹ️ Thông tin', '🏧 Chi hộ', '/menu', '/start'
   ];
 
   bot.use(async (ctx, next) => {
@@ -291,7 +299,6 @@ if (!bot) {
         if (id) {
           awaitingName.delete(id);
           awaitingStatus.delete(id);
-          awaitingCustomer.delete(id);
           withdrawState.delete(id);
           confirmCreateState.delete(id);
           randomNameState.delete(id);
@@ -324,27 +331,11 @@ if (!bot) {
 
 const confirmCreateState = new Map();
 const randomNameState = new Map();
+const ibftState = new Map();
 
   bot.hears('🎲 Random tên', async (ctx) => {
     randomNameState.set(ctx.from.id, { stage: 'enter_prefix' });
-    await ctx.reply('Vui lòng nhập Họ và Tên đệm (Ví dụ: NGUYEN VAN):', Markup.keyboard([['❌ Hủy']]).resize());
-  });
-
-  bot.hears(['👨 Nam', '👩 Nữ'], async (ctx, next) => {
-    const st = randomNameState.get(ctx.from.id);
-    if (!st || st.stage !== 'choose_gender') return next();
-    
-    const gender = ctx.message.text === '👨 Nam' ? 'Nam' : 'Nữ';
-    const firstName = randomFirstName(gender);
-    const fullName = `${st.prefix} ${firstName}`.trim().toUpperCase();
-    
-    randomNameState.delete(ctx.from.id);
-    confirmCreateState.set(ctx.from.id, fullName);
-    
-    await ctx.reply(`Bạn chuẩn bị tạo VA với tên: *${fullName}*\n\nVui lòng xác nhận:`, {
-      parse_mode: 'Markdown',
-      reply_markup: Markup.keyboard([['✅ Xác nhận tạo', '❌ Hủy']]).resize().reply_markup
-    });
+    await ctx.reply('Nhập Họ và Tên đệm (Ví dụ: LE VAN):', Markup.keyboard([['❌ Hủy']]).resize());
   });
 
   bot.hears('✍️ Nhập tên', async (ctx) => {
@@ -411,6 +402,40 @@ const randomNameState = new Map();
       const msg = e.response?.data?.errorMessage || e.message;
       await ctx.reply(`Lỗi lấy số dư: ${msg}`, menuKeyboard(ctx));
     }
+  });
+
+  bot.command('firmtoken', async (ctx) => {
+    if (!isAdminId(ctx.from.id)) return;
+    try {
+      const scope = process.env.HPAY_FIRM_SCOPE || 'firm';
+      const r = await getAccessToken(scope);
+      const t = r.access_token || '';
+      if (!t) {
+        await ctx.reply('Không lấy được token chi hộ.', menuKeyboard(ctx));
+        return;
+      }
+      await ctx.reply(`Token (firm): ${t}\nHạn: ${r.expires_in || 0}s\nScope: ${scope}`, menuKeyboard(ctx));
+    } catch (e) {
+      const status = e.response?.status;
+      const msg = e.response?.data?.message || e.response?.data?.error || e.message;
+      await ctx.reply(`Lỗi lấy token chi hộ${status ? ` (${status})` : ''}: ${msg}`, menuKeyboard(ctx));
+    }
+  });
+
+  const { createIBFT } = require('./hpayClient');
+  bot.hears('🏧 Chi hộ', async (ctx) => {
+    if (!isAdminId(ctx.from.id)) {
+      await ctx.reply('Bạn không có quyền dùng chức năng này.', menuKeyboard(ctx));
+      return;
+    }
+    const bankCode = process.env.IBFT_TEST_BANK_CODE || 'KLB';
+    const accountNumber = process.env.IBFT_TEST_ACCOUNT || '77417777';
+    const accountName = process.env.IBFT_TEST_NAME || 'NGUYEN VAN A';
+    ibftState.set(ctx.from.id, { stage: 'amount', bankCode, accountNumber, accountName });
+    await ctx.reply(
+      `Chi hộ test đến ${bankCode} ${accountNumber} - ${accountName}\nNhập số tiền (VND):`,
+      Markup.keyboard([['❌ Hủy']]).resize()
+    );
   });
 
   bot.hears('ℹ️ Thông tin', async (ctx) => {
@@ -528,9 +553,9 @@ const randomNameState = new Map();
     awaitingName.delete(id);
     confirmCreateState.delete(id);
     randomNameState.delete(id);
+    ibftState.delete(id);
     awaitingWdUpdate.delete(id);
     awaitingStatus.delete(id);
-    awaitingCustomer.delete(id);
     await ctx.reply('Đã hủy thao tác.', menuKeyboard(ctx));
   });
 
@@ -667,13 +692,108 @@ const randomNameState = new Map();
     if (rnSt) {
       if (isMenuText(text)) return next();
       if (rnSt.stage === 'enter_prefix') {
-        const prefix = text.trim();
+        const prefix = text
+          .trim()
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '')
+          .replace(/[^A-Za-z0-9 ]+/g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim()
+          .toUpperCase();
         if (prefix.length === 0) {
           await ctx.reply('Họ và Tên đệm không được để trống. Nhập lại:', Markup.keyboard([['❌ Hủy']]).resize());
           return;
         }
-        randomNameState.set(ctx.from.id, { stage: 'choose_gender', prefix });
-        await ctx.reply('Vui lòng chọn giới tính:', Markup.keyboard([['👨 Nam', '👩 Nữ'], ['❌ Hủy']]).resize());
+
+        const options = [];
+        const seen = new Set();
+        while (options.length < 3) {
+          const firstName = randomFirstName()
+            .normalize('NFD')
+            .replace(/[\u0300-\u036f]/g, '')
+            .replace(/[^A-Za-z0-9 ]+/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim()
+            .toUpperCase();
+          const fullName = `${prefix} ${firstName}`.replace(/\s+/g, ' ').trim();
+          if (!seen.has(fullName)) {
+            seen.add(fullName);
+            options.push(fullName);
+          }
+        }
+
+        const buttons = options.map((n) => [`✅ ${n}`]);
+        buttons.push(['❌ Hủy']);
+
+        randomNameState.set(ctx.from.id, { stage: 'choose_option', prefix, options });
+        await ctx.reply(
+          `Bạn muốn tạo VA với tên gốc *${prefix}*.\nHãy chọn một trong số các tên mở rộng dưới đây:`,
+          {
+            parse_mode: 'Markdown',
+            reply_markup: Markup.keyboard(buttons).resize().reply_markup,
+          }
+        );
+        return;
+      }
+      if (rnSt.stage === 'choose_option') {
+        const raw = text.trim();
+        const chosen = raw.startsWith('✅') ? raw.replace(/^✅\s*/, '') : raw;
+        const ok = Array.isArray(rnSt.options) && rnSt.options.includes(chosen);
+        if (!ok) {
+          const buttons = (rnSt.options || []).map((n) => [`✅ ${n}`]);
+          buttons.push(['❌ Hủy']);
+          await ctx.reply('Vui lòng chọn 1 tên trong danh sách:', Markup.keyboard(buttons).resize());
+          return;
+        }
+        randomNameState.delete(ctx.from.id);
+        confirmCreateState.set(ctx.from.id, chosen);
+        await ctx.reply(`Bạn chuẩn bị tạo VA với tên: *${chosen}*\n\nVui lòng xác nhận:`, {
+          parse_mode: 'Markdown',
+          reply_markup: Markup.keyboard([['✅ Xác nhận tạo', '❌ Hủy']]).resize().reply_markup
+        });
+        return;
+      }
+    }
+    const ibft = ibftState.get(ctx.from.id);
+    if (ibft) {
+      if (isMenuText(text)) return next();
+      if (ibft.stage === 'amount') {
+        const amount = Number(String(text).replace(/[^\d]/g, ''));
+        if (!amount || amount <= 0) {
+          await ctx.reply('Số tiền không hợp lệ. Nhập lại:', Markup.keyboard([['❌ Hủy']]).resize());
+          return;
+        }
+        try {
+          const remark = `TG ${ctx.from.username || ctx.from.id}`.replace(/[^A-Za-z0-9 ]+/g, ' ').slice(0, 50);
+          const callbackUrl = process.env.IBFT_CALLBACK_URL || '';
+          const { decoded, raw, debug } = await createIBFT({
+            bankCode: ibft.bankCode,
+            accountNumber: ibft.accountNumber,
+            accountName: ibft.accountName,
+            amount,
+            remark,
+            callbackUrl,
+          });
+          ibftState.delete(ctx.from.id);
+          const lines = [];
+          if (decoded && typeof decoded === 'object') {
+            if (decoded.orderId) lines.push(`OrderId: ${decoded.orderId}`);
+            if (decoded.tranStatus) lines.push(`Trạng thái: ${decoded.tranStatus}`);
+          } else {
+            lines.push(`Kết quả: ${raw.errorMessage || 'Unknown'}`);
+          }
+          await ctx.reply(lines.join('\n') || 'Đã tạo yêu cầu chi hộ.', menuKeyboard(ctx));
+          const rb = JSON.stringify(debug?.decodedRequest || {}, null, 2);
+          const rs = JSON.stringify(debug?.decodedResponse || debug?.response || {}, null, 2);
+          await ctx.replyWithMarkdown(
+            `*Request body:*\n\`\`\`json\n${rb}\n\`\`\`\n*Response body:*\n\`\`\`json\n${rs}\n\`\`\``,
+            menuKeyboard(ctx)
+          );
+        } catch (e) {
+          ibftState.delete(ctx.from.id);
+          const msg = e.response?.data?.errorMessage || e.message;
+          await ctx.reply(`Lỗi chi hộ: ${msg}`, menuKeyboard(ctx));
+        }
         return;
       }
     }
@@ -816,22 +936,6 @@ const randomNameState = new Map();
         parse_mode: 'Markdown',
         reply_markup: Markup.keyboard([['✅ Xác nhận tạo', '❌ Hủy']]).resize().reply_markup
       });
-      return;
-    }
-    if (awaitingCustomer.get(ctx.from.id)) {
-      if (isMenuText(text)) {
-        awaitingCustomer.delete(ctx.from.id);
-        return next();
-      }
-      const id = awaitingCustomer.get(ctx.from.id);
-      awaitingCustomer.delete(ctx.from.id);
-      const customerName = text.trim().slice(0, 100);
-      const s = requestStatus.get(id) || {};
-      const newS = { ...s, customerName };
-      requestStatus.set(id, newS);
-      const rec = db.getByRequestId(id) || {};
-      db.upsert({ ...rec, requestId: id, customerName });
-      await ctx.reply(formatStatus(id), menuKeyboard(ctx));
       return;
     }
     if (awaitingStatus.get(ctx.from.id)) {

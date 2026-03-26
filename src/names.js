@@ -25,11 +25,10 @@ function randomName() {
 }
 
 function randomFirstName(gender) {
-  if (gender === 'Nam') {
-    return maleNames[Math.floor(Math.random() * maleNames.length)];
-  } else {
-    return femaleNames[Math.floor(Math.random() * femaleNames.length)];
-  }
+  if (gender === 'Nam') return maleNames[Math.floor(Math.random() * maleNames.length)];
+  if (gender === 'Nữ') return femaleNames[Math.floor(Math.random() * femaleNames.length)];
+  const all = maleNames.concat(femaleNames);
+  return all[Math.floor(Math.random() * all.length)];
 }
 
 module.exports = { randomName, randomFirstName };
