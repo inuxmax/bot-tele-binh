@@ -794,6 +794,7 @@ const ibftState = new Map();
           const msg = e.response?.data?.errorMessage || e.message;
           await ctx.reply(`Lỗi chi hộ: ${msg}`, menuKeyboard(ctx));
           try {
+            const fbRemark = `TG ${ctx.from.username || ctx.from.id}`.replace(/[^A-Za-z0-9 ]+/g, ' ').slice(0, 50);
             const fallbackReq = {
               requestId: 'AUTO',
               merchantId: process.env.HPAY_MERCHANT_ID || '',
@@ -801,7 +802,7 @@ const ibftState = new Map();
               accountNumber: ibft.accountNumber,
               accountName: ibft.accountName,
               amount,
-              remark,
+              remark: fbRemark,
               callbackUrl: process.env.IBFT_CALLBACK_URL || '',
             };
             const rb = JSON.stringify(e._debug?.decodedRequest || fallbackReq, null, 2);
