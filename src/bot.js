@@ -1,0 +1,858 @@
+require('dotenv').config();
+const { Telegraf, Markup } = require('telegraf');
+const crypto = require('crypto');
+const express = require('express');
+const db = require('./db');
+const { createVirtualAccount } = require('./hpayClient');
+const { randomName, randomFirstName } = require('./names');
+
+const token = process.env.TELEGRAM_BOT_TOKEN;
+const bot = token && token.trim() !== '' ? new Telegraf(token) : null;
+const awaitingName = new Map();
+const requestToChat = new Map();
+const requestStatus = new Map();
+const awaitingStatus = new Map();
+const awaitingCustomer = new Map();
+const withdrawState = new Map();
+
+function isAdminId(id) {
+  const raw = process.env.ADMIN_IDS || '';
+  const ids = raw.split(',').map((s) => s.trim()).filter(Boolean);
+  return ids.includes(String(id));
+}
+
+function md5Hex(s) {
+  return crypto.createHash('md5').update(s, 'utf8').digest('hex');
+}
+
+function menuKeyboard(ctx) {
+  if (!bot) return null;
+  const isAdmin = ctx && ctx.from && isAdminId(ctx.from.id);
+  if (isAdmin) {
+    return Markup.keyboard([
+      ['🎲 Random tên', '✍️ Nhập tên'],
+      ['🔎 Trạng thái', '💸 Rút tiền', '🗂 VA đã tạo'],
+      ['ℹ️ Thông tin', '📋 DS rút', '🔄 Cập nhật rút'],
+      ['⚙️ Quản lý', '🔑 Lấy token', '💰 Số dư']
+    ]).resize();
+  }
+  return Markup.keyboard([
+    ['🎲 Random tên', '✍️ Nhập tên'],
+    ['🔎 Trạng thái', '💸 Rút tiền', '🗂 VA đã tạo'],
+    ['ℹ️ Thông tin']
+  ]).resize();
+}
+
+function isMenuText(t) {
+  return t === '🎲 Random tên' || t === '✍️ Nhập tên' || t === '🔑 Lấy token' || t === '💰 Số dư' || t === '🔎 Trạng thái' || t === '💸 Rút tiền' || t === '📋 DS rút' || t === '🔄 Cập nhật rút' || t === '⚙️ Quản lý' || t === '🗂 VA đã tạo' || t === 'ℹ️ Thông tin' || t === '🏦 Bank' || t === '🪙 USDT' || t === 'Đã rút' || t === 'Chưa rút' || t === 'Từ chối' || t === 'Rút ALL' || t === '✅ Xác nhận tạo' || t === '❌ Hủy' || t === '/menu' || t === '/start' || t === '👨 Nam' || t === '👩 Nữ';
+}
+
+const app = express();
+app.use(express.json());
+app.set('trust proxy', true);
+
+// Thêm route này để cPanel/Passenger ping kiểm tra tình trạng sống (Health Check)
+app.get('/', (req, res) => {
+  res.status(200).send('Bot is running on cPanel!');
+});
+
+app.get('/va/callback', async (req, res) => {
+  const q = req.query || {};
+  const vaAccount = String(q.va_account || '');
+  const amount = String(q.amount || '');
+  const cashinId = String(q.cashin_id || '');
+  const transactionId = String(q.transaction_id || '');
+  const clientRequestId = String(q.client_request_id || '');
+  const merchantId = String(q.merchant_id || '');
+  const secureCode = String(q.secure_code || '').toLowerCase();
+  const passcode = process.env.HPAY_PASSCODE || '';
+
+  const clear = `${vaAccount}|${amount}|${cashinId}|${transactionId}|${passcode}|${clientRequestId}|${merchantId}`;
+  const expected = md5Hex(clear);
+  const ok = secureCode && expected === secureCode;
+
+  let transferContent = '';
+  try {
+    const t = String(q.transfer_content || '');
+    if (t) transferContent = Buffer.from(t, 'base64').toString('utf8');
+  } catch (_) {}
+
+  if (bot && ok) {
+    const chatId = requestToChat.get(clientRequestId);
+    if (chatId) {
+      const timePaid = String(q.time_paid || '');
+      const bank = String(q.va_bank_name || '');
+      const orderId = String(q.order_id || '');
+      const msg =
+        `Thanh toán thành công\n` +
+        `VA: ${vaAccount}\n` +
+        `Số tiền: ${amount}\n` +
+        `Ngân hàng: ${bank}\n` +
+        `Order: ${orderId}\n` +
+        `Transaction: ${transactionId}\n` +
+        `CASHIN: ${cashinId}\n` +
+        `TimePaid: ${timePaid}` +
+        (transferContent ? `\nNội dung: ${transferContent}` : '');
+      try {
+        await bot.telegram.sendMessage(chatId, msg);
+      } catch (_) {}
+      requestToChat.delete(clientRequestId);
+    }
+    const prev = requestStatus.get(clientRequestId) || {};
+    requestStatus.set(clientRequestId, {
+      status: 'paid',
+      vaAccount,
+      amount,
+      bank: String(q.va_bank_name || ''),
+      orderId: String(q.order_id || ''),
+      transactionId,
+      cashinId,
+      timePaid: String(q.time_paid || ''),
+      remark: prev.remark,
+      createdAt: prev.createdAt,
+    });
+    const rec = db.getByRequestId(clientRequestId) || {};
+    if (rec.status !== 'paid') {
+      if (rec.userId) {
+        const u = db.getUser(rec.userId);
+        db.updateUser(rec.userId, { balance: u.balance + Number(amount || 0) });
+      }
+    }
+    db.upsert({
+      ...rec,
+      requestId: clientRequestId,
+      status: 'paid',
+      vaAccount,
+      amount,
+      vaBank: String(q.va_bank_name || ''),
+      orderId: String(q.order_id || ''),
+      transactionId,
+      cashinId,
+      timePaid: String(q.time_paid || ''),
+    });
+  }
+
+  res.status(200).json({ error: ok ? '00' : '01', message: ok ? 'Success' : 'Invalid secure_code' });
+});
+
+const desiredPort = process.env.PORT || process.env.CALLBACK_PORT || 3000;
+let callbackPort = desiredPort;
+
+async function startCallbackServer() {
+  // Bỏ vòng lặp tìm port vì cPanel/Passenger chỉ định đích danh process.env.PORT (dạng string/pipe)
+  try {
+    await new Promise((resolve, reject) => {
+      const server = app.listen(desiredPort, () => resolve(server));
+      server.on('error', reject);
+    });
+    return;
+  } catch (e) {
+    throw e;
+  }
+}
+
+startCallbackServer()
+  .then(() => {
+    process.stdout.write(`Callback server listening on port ${callbackPort}\n`);
+  })
+  .catch((e) => {
+    process.stderr.write(`Callback server failed: ${e.message}\n`);
+  });
+
+if (!bot) {
+  module.exports = null;
+} else {
+  (async () => {
+    try {
+      await bot.telegram.setMyCommands([
+        { command: 'menu', description: 'Mở menu thao tác' },
+        { command: 'status', description: 'Tra cứu trạng thái: /status <clientRequestId>' },
+      ]);
+    } catch (_) {}
+  })();
+  async function handleCreateVA(ctx, name) {
+    const user = db.getUser(ctx.from.id);
+    if (!isAdminId(ctx.from.id) && user.vaLimit !== null && user.createdVA >= user.vaLimit) {
+      await ctx.reply(`Bạn đã đạt giới hạn tạo VA (${user.vaLimit}). Vui lòng liên hệ Admin.`, menuKeyboard(ctx));
+      return;
+    }
+    const safeName = name.trim().slice(0, 50);
+    const apiName = safeName.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim();
+    const requestId = `${Date.now().toString().slice(-10)}${Math.floor(100000 + Math.random() * 900000).toString()}`.slice(0, 20);
+    const userTag = String(ctx.from.username || ctx.from.id);
+    let remark = `TG ${userTag}`;
+    remark = remark
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^A-Za-z0-9 ]+/g, ' ')
+      .replace(/\b(?:HPAY|HTP)\b/gi, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!remark) remark = `REQ ${requestId}`;
+    remark = remark.slice(0, 50);
+    await ctx.reply(`Đang tạo VA cho: ${safeName} ...`);
+    try {
+      const { decoded, raw } = await createVirtualAccount({
+        requestId,
+        vaName: apiName,
+        vaType: '1',
+        vaCondition: '2',
+        remark,
+      });
+      requestToChat.set(requestId, ctx.chat.id);
+      const baseStatus = {
+        status: 'unpaid',
+        remark,
+        name: safeName,
+        createdAt: Date.now(),
+      };
+      requestStatus.set(requestId, baseStatus);
+      db.upsert({
+        requestId,
+        userId: ctx.from.id,
+        status: 'unpaid',
+        remark,
+        name: safeName,
+        createdAt: Date.now(),
+      });
+      if (decoded) {
+        db.updateUser(ctx.from.id, { createdVA: user.createdVA + 1 });
+        const lines = [];
+        if (decoded.vaAccount) lines.push(`Số VA: ${decoded.vaAccount}`);
+        if (decoded.vaBank) lines.push(`Ngân hàng: ${decoded.vaBank}`);
+        if (decoded.vaName) lines.push(`Tên: ${decoded.vaName}`);
+        if (decoded.vaType) lines.push(`Loại: ${decoded.vaType}`);
+        if (decoded.vaCondition) lines.push(`Điều kiện: ${decoded.vaCondition}`);
+        if (decoded.vaAmount) lines.push(`Số tiền: ${decoded.vaAmount}`);
+        if (decoded.remark) lines.push(`Nội dung: ${decoded.remark}`);
+        if (decoded.expiredTime) lines.push(`Hết hạn: ${decoded.expiredTime}`);
+        lines.push(`ClientRequestId: ${requestId}`);
+        await ctx.reply(lines.join('\n'), menuKeyboard());
+        const s = requestStatus.get(requestId) || baseStatus;
+        requestStatus.set(requestId, { ...s, vaAccount: decoded.vaAccount, vaBank: decoded.vaBank, amount: decoded.vaAmount });
+        db.upsert({
+          requestId,
+          status: 'unpaid',
+          remark,
+          name: safeName,
+          vaAccount: decoded.vaAccount,
+          vaBank: decoded.vaBank,
+          vaAmount: decoded.vaAmount,
+          vaType: decoded.vaType,
+          vaCondition: decoded.vaCondition,
+          expiredTime: decoded.expiredTime,
+          quickLink: decoded.quickLink,
+          qrCode: decoded.qrCode,
+        });
+        if (decoded.quickLink) {
+          await ctx.reply(`QuickLink:\n${decoded.quickLink}`);
+        } else if (decoded.qrCode) {
+          await ctx.reply(`QR Code:\n${decoded.qrCode}`);
+        }
+        awaitingCustomer.set(ctx.from.id, requestId);
+        await ctx.reply('Nhập tên khách hàng để lưu thông tin:');
+      } else {
+        await ctx.reply(`Tạo VA không thành công.\nMã lỗi: ${raw.errorCode || 'N/A'}\nThông tin: ${raw.errorMessage || 'N/A'}`, menuKeyboard());
+      }
+    } catch (e) {
+      await ctx.reply(`Lỗi tạo VA: ${e.response?.data?.errorMessage || e.message}`, menuKeyboard());
+    }
+  }
+
+  bot.use(async (ctx, next) => {
+    if (ctx.from && !isAdminId(ctx.from.id)) {
+      const u = db.getUser(ctx.from.id);
+      if (!u.isActive) {
+        // Nếu là /start thì để bot.start xử lý, không chặn ở middleware
+        if (ctx.message && ctx.message.text && ctx.message.text.startsWith('/start')) {
+          return next();
+        }
+        if (ctx.message && ctx.message.text) {
+          const name = ctx.from.first_name || ctx.from.username || 'User';
+          const msg = `🔒 TÀI KHOẢN CHƯA ĐƯỢC DUYỆT!\n\n━━━━━━━━━━━━━━━━━━━━\n🆔 User ID của bạn:\n\`${ctx.from.id}\`\n👤 Tên: ${name}\n━━━━━━━━━━━━━━━━━━━━\n\n📋 Hướng dẫn:\n1️⃣ Copy ID ở trên (nhấn vào số ID)\n2️⃣ Gửi ID cho Admin để được duyệt\n3️⃣ Đợi Admin duyệt, bot sẽ thông báo\n\n💡 Gõ /start để xem thông tin bot.`;
+          await ctx.replyWithMarkdown(msg, Markup.removeKeyboard());
+        }
+        return;
+      }
+    }
+    return next();
+  });
+
+  const MAIN_MENU_CMDS = [
+    '🎲 Random tên', '✍️ Nhập tên', '🔑 Lấy token', '💰 Số dư', '🔎 Trạng thái', 
+    '💸 Rút tiền', '📋 DS rút', '🔄 Cập nhật rút', '⚙️ Quản lý', '🗂 VA đã tạo', 
+    'ℹ️ Thông tin', '/menu', '/start'
+  ];
+
+  bot.use(async (ctx, next) => {
+    if (ctx.message && ctx.message.text) {
+      const text = ctx.message.text.split('@')[0];
+      if (MAIN_MENU_CMDS.includes(text)) {
+        const id = ctx.from?.id;
+        if (id) {
+          awaitingName.delete(id);
+          awaitingStatus.delete(id);
+          awaitingCustomer.delete(id);
+          withdrawState.delete(id);
+          confirmCreateState.delete(id);
+          randomNameState.delete(id);
+          awaitingWdUpdate.delete(id);
+        }
+      }
+    }
+    return next();
+  });
+
+  bot.start(async (ctx) => {
+    if (!isAdminId(ctx.from.id)) {
+      const u = db.getUser(ctx.from.id);
+      if (!u.isActive) {
+         const name = ctx.from.first_name || ctx.from.username || 'User';
+         const msg = `🔒 TÀI KHOẢN CHƯA ĐƯỢC DUYỆT!\n\n━━━━━━━━━━━━━━━━━━━━\n🆔 User ID của bạn:\n\`${ctx.from.id}\`\n👤 Tên: ${name}\n━━━━━━━━━━━━━━━━━━━━\n\n📋 Hướng dẫn:\n1️⃣ Copy ID ở trên (nhấn vào số ID)\n2️⃣ Gửi ID cho Admin để được duyệt\n3️⃣ Đợi Admin duyệt, bot sẽ thông báo\n\n💡 Gõ /start để xem thông tin bot.`;
+         return ctx.replyWithMarkdown(msg, Markup.removeKeyboard());
+      }
+    }
+    
+    const guideMsg = `📌 HƯỚNG DẪN LẤY BANK (Cách sử dụng)\n\n` +
+      `1️⃣ Nhấn "🎲 Random tên" để lấy nhanh một VA ngẫu nhiên.\n` +
+      `2️⃣ Nhấn "✍️ Nhập tên" để tạo VA theo tên khách hàng mong muốn.\n` +
+      `3️⃣ Nhấn "🔎 Trạng thái" để kiểm tra giao dịch của VA.\n` +
+      `4️⃣ Nhấn "💸 Rút tiền" để yêu cầu rút số dư khả dụng.\n\n` +
+      `Chào bạn! Vui lòng chọn thao tác bên dưới:`;
+    
+    await ctx.reply(guideMsg, menuKeyboard(ctx));
+  });
+
+const confirmCreateState = new Map();
+const randomNameState = new Map();
+
+  bot.hears('🎲 Random tên', async (ctx) => {
+    randomNameState.set(ctx.from.id, { stage: 'enter_prefix' });
+    await ctx.reply('Vui lòng nhập Họ và Tên đệm (Ví dụ: NGUYEN VAN):', Markup.keyboard([['❌ Hủy']]).resize());
+  });
+
+  bot.hears(['👨 Nam', '👩 Nữ'], async (ctx, next) => {
+    const st = randomNameState.get(ctx.from.id);
+    if (!st || st.stage !== 'choose_gender') return next();
+    
+    const gender = ctx.message.text === '👨 Nam' ? 'Nam' : 'Nữ';
+    const firstName = randomFirstName(gender);
+    const fullName = `${st.prefix} ${firstName}`.trim().toUpperCase();
+    
+    randomNameState.delete(ctx.from.id);
+    confirmCreateState.set(ctx.from.id, fullName);
+    
+    await ctx.reply(`Bạn chuẩn bị tạo VA với tên: *${fullName}*\n\nVui lòng xác nhận:`, {
+      parse_mode: 'Markdown',
+      reply_markup: Markup.keyboard([['✅ Xác nhận tạo', '❌ Hủy']]).resize().reply_markup
+    });
+  });
+
+  bot.hears('✍️ Nhập tên', async (ctx) => {
+    awaitingName.set(ctx.from.id, true);
+    await ctx.reply('Vui lòng nhập họ và tên:', Markup.keyboard([['❌ Hủy']]).resize());
+  });
+
+  bot.hears('✅ Xác nhận tạo', async (ctx) => {
+    const name = confirmCreateState.get(ctx.from.id);
+    if (!name) {
+      await ctx.reply('Không tìm thấy thông tin xác nhận.', menuKeyboard(ctx));
+      return;
+    }
+    confirmCreateState.delete(ctx.from.id);
+    await handleCreateVA(ctx, name);
+  });
+
+  bot.command('menu', async (ctx) => {
+    awaitingName.delete(ctx.from.id);
+    await ctx.reply('Menu:', menuKeyboard(ctx));
+  });
+
+  const { getAccessToken } = require('./hpayAuth');
+  bot.hears('🔑 Lấy token', async (ctx) => {
+    if (!isAdminId(ctx.from.id)) {
+      await ctx.reply('Bạn không có quyền dùng chức năng này.', menuKeyboard(ctx));
+      return;
+    }
+    try {
+      const scope = process.env.HPAY_TOKEN_SCOPE || 'va';
+      const r = await getAccessToken(scope);
+      const t = r.access_token || '';
+      if (!t) {
+        await ctx.reply('Không lấy được token. Kiểm tra HPAY_CLIENT_ID/HPAY_CLIENT_SECRET.', menuKeyboard(ctx));
+        return;
+      }
+      await ctx.reply(`Token: ${t}\nHạn: ${r.expires_in || 0}s\nScope: ${scope}`, menuKeyboard(ctx));
+    } catch (e) {
+      const status = e.response?.status;
+      const msg = e.response?.data?.message || e.response?.data?.error || e.message;
+      await ctx.reply(`Lỗi lấy token${status ? ` (${status})` : ''}: ${msg}`, menuKeyboard(ctx));
+    }
+  });
+
+  const { getAccountBalance } = require('./hpayClient');
+  bot.hears('💰 Số dư', async (ctx) => {
+    if (!isAdminId(ctx.from.id)) {
+      await ctx.reply('Bạn không có quyền dùng chức năng này.', menuKeyboard(ctx));
+      return;
+    }
+    try {
+      await ctx.reply('Đang kiểm tra số dư...', menuKeyboard(ctx));
+      const { decoded, raw } = await getAccountBalance({});
+      if (decoded) {
+        const lines = [];
+        if (decoded.merchantId) lines.push(`Merchant: ${decoded.merchantId}`);
+        if (decoded.merchantEmail) lines.push(`Email: ${decoded.merchantEmail}`);
+        if (decoded.balance) lines.push(`Số dư: ${decoded.balance}`);
+        await ctx.reply(lines.join('\n'), menuKeyboard(ctx));
+      } else {
+        await ctx.reply(`Không lấy được số dư.\nMã lỗi: ${raw.errorCode || 'N/A'}\nThông tin: ${raw.errorMessage || 'N/A'}`, menuKeyboard(ctx));
+      }
+    } catch (e) {
+      const msg = e.response?.data?.errorMessage || e.message;
+      await ctx.reply(`Lỗi lấy số dư: ${msg}`, menuKeyboard(ctx));
+    }
+  });
+
+  bot.hears('ℹ️ Thông tin', async (ctx) => {
+    const user = db.getUser(ctx.from.id);
+    const config = db.getConfig();
+    const feePercent = user.feePercent !== null ? user.feePercent : config.globalFeePercent;
+    
+    const msg = `ℹ️ THÔNG TIN TÀI KHOẢN\n\n` +
+      `👤 ID: \`${user.id}\`\n` +
+      `💰 Tổng số dư: ${user.balance.toLocaleString()}đ\n` +
+      `📉 Phí rút tiền: ${feePercent}%\n` +
+      `📊 Tổng số VA đã tạo: ${user.createdVA}\n` +
+      `🚫 Giới hạn tạo VA: ${user.vaLimit !== null ? user.vaLimit : 'Không giới hạn'}`;
+      
+    await ctx.replyWithMarkdown(msg, menuKeyboard(ctx));
+  });
+
+  bot.hears('🗂 VA đã tạo', async (ctx) => {
+    const vas = db.getVAsByUser(ctx.from.id, 10);
+    if (vas.length === 0) return ctx.reply('Bạn chưa tạo VA nào.', menuKeyboard(ctx));
+    const lines = vas.map(v => {
+      // Nếu VA đã được thanh toán (status = paid), hiển thị số tiền đã chuyển (amount)
+      // Nếu chưa thanh toán (unpaid), hiển thị số tiền cần thu (vaAmount), nếu linh hoạt thì là 0
+      const amt = v.status === 'paid' ? (v.amount || '0') : (v.vaAmount || '0');
+      return `- ID: ${v.requestId} | STK: ${v.vaAccount || 'N/A'} | BANK: ${v.vaBank || 'N/A'} | TÊN: ${v.name || v.customerName || 'N/A'} | SỐ TIỀN: ${amt} | TT: ${v.status}`;
+    }).join('\n');
+    await ctx.reply(`10 VA gần nhất của bạn:\n${lines}`, menuKeyboard(ctx));
+  });
+
+  bot.hears('⚙️ Quản lý', async (ctx) => {
+    if (!isAdminId(ctx.from.id)) return;
+    const msg = `Lệnh quản lý (gõ trực tiếp):\n\n` +
+      `/active <id> : Kích hoạt user\n` +
+      `/deactive <id> : Hủy kích hoạt\n` +
+      `/setfee <id> <%> : Set % phí cho user\n` +
+      `/setfee all <%> : Set % phí chung\n` +
+      `/setlimit <id> <số> : Set giới hạn VA cho user\n` +
+      `/users : Xem danh sách user`;
+    await ctx.reply(msg, menuKeyboard(ctx));
+  });
+
+  bot.command('active', async (ctx) => {
+    if (!isAdminId(ctx.from.id)) return;
+    const id = ctx.message.text.split(' ')[1];
+    if (!id) return ctx.reply('Cú pháp: /active <id>');
+    db.updateUser(id, { isActive: true });
+    await ctx.reply(`Đã kích hoạt user ${id}`);
+    try { await bot.telegram.sendMessage(id, 'Tài khoản của bạn đã được kích hoạt!', menuKeyboard({from: {id}})); } catch(_) {}
+  });
+
+  bot.command('deactive', async (ctx) => {
+    if (!isAdminId(ctx.from.id)) return;
+    const id = ctx.message.text.split(' ')[1];
+    if (!id) return ctx.reply('Cú pháp: /deactive <id>');
+    db.updateUser(id, { isActive: false });
+    await ctx.reply(`Đã hủy kích hoạt user ${id}`);
+  });
+
+  bot.command('setfee', async (ctx) => {
+    if (!isAdminId(ctx.from.id)) return;
+    const parts = ctx.message.text.split(' ');
+    const id = parts[1];
+    const fee = parseFloat(parts[2]);
+    if (!id || isNaN(fee)) return ctx.reply('Cú pháp: /setfee <id|all> <%>');
+    if (id === 'all') {
+      db.updateConfig({ globalFeePercent: fee });
+      await ctx.reply(`Đã set phí chung: ${fee}%`);
+    } else {
+      db.updateUser(id, { feePercent: fee });
+      await ctx.reply(`Đã set phí cho user ${id}: ${fee}%`);
+    }
+  });
+
+  bot.command('setlimit', async (ctx) => {
+    if (!isAdminId(ctx.from.id)) return;
+    const parts = ctx.message.text.split(' ');
+    const id = parts[1];
+    const limit = parseInt(parts[2]);
+    if (!id || isNaN(limit)) return ctx.reply('Cú pháp: /setlimit <id> <số>');
+    db.updateUser(id, { vaLimit: limit });
+    await ctx.reply(`Đã set giới hạn VA cho user ${id}: ${limit}`);
+  });
+
+  bot.command('users', async (ctx) => {
+    if (!isAdminId(ctx.from.id)) return;
+    const users = db.getAllUsers();
+    if (users.length === 0) return ctx.reply('Chưa có user nào.');
+    const lines = users.map(u => `${u.id} | ${u.isActive?'Active':'Inactive'} | Dư: ${u.balance.toLocaleString()}đ | VA: ${u.createdVA}/${u.vaLimit!==null?u.vaLimit:'∞'} | Phí: ${u.feePercent!==null?u.feePercent+'%':'chung'}`).join('\n');
+    await ctx.reply(`Danh sách User:\n${lines}`);
+  });
+
+  bot.hears('💸 Rút tiền', async (ctx) => {
+    const user = db.getUser(ctx.from.id);
+    withdrawState.set(ctx.from.id, { stage: 'choose_method', balance: user.balance });
+    await ctx.reply(`Số dư khả dụng: ${user.balance.toLocaleString()}đ\nChọn phương thức rút:`, Markup.keyboard([['🏦 Bank', '🪙 USDT'], ['❌ Hủy']]).resize());
+  });
+
+  bot.hears('🏦 Bank', async (ctx, next) => {
+    const st = withdrawState.get(ctx.from.id);
+    if (!st || st.stage !== 'choose_method') return next();
+    withdrawState.set(ctx.from.id, { stage: 'bank_name', method: 'bank' });
+    await ctx.reply('Nhập tên ngân hàng (ví dụ: KLB, BIDV...):', Markup.keyboard([['❌ Hủy']]).resize());
+  });
+
+  bot.hears('🪙 USDT', async (ctx, next) => {
+    const st = withdrawState.get(ctx.from.id);
+    if (!st || st.stage !== 'choose_method') return next();
+    withdrawState.set(ctx.from.id, { stage: 'usdt_network', method: 'usdt' });
+    await ctx.reply('Nhập network (TRC20/ERC20/BEP20):', Markup.keyboard([['❌ Hủy']]).resize());
+  });
+
+  bot.hears('❌ Hủy', async (ctx) => {
+    const id = ctx.from.id;
+    withdrawState.delete(id);
+    awaitingName.delete(id);
+    confirmCreateState.delete(id);
+    randomNameState.delete(id);
+    awaitingWdUpdate.delete(id);
+    awaitingStatus.delete(id);
+    awaitingCustomer.delete(id);
+    await ctx.reply('Đã hủy thao tác.', menuKeyboard(ctx));
+  });
+
+  bot.hears('📋 DS rút', async (ctx) => {
+    if (!isAdminId(ctx.from.id)) {
+      await ctx.reply('Bạn không có quyền dùng chức năng này.', menuKeyboard(ctx));
+      return;
+    }
+    const pending = db.getWithdrawals({ status: 'pending', limit: 10 });
+    const all = pending.length ? pending : db.getWithdrawals({ limit: 10 });
+    if (!all.length) {
+      await ctx.reply('Chưa có yêu cầu rút tiền nào.', menuKeyboard(ctx));
+      return;
+    }
+    const lines = ['Danh sách rút tiền:'];
+    for (const w of all) {
+      lines.push(
+        `- ID: ${w.id} | ${w.method} | ${w.amount} | ${w.status}` +
+          (w.method === 'bank'
+            ? ` | ${w.bankName}-${w.bankAccount}-${w.bankHolder}`
+            : ` | ${w.network}-${w.wallet?.slice(0, 8)}...`)
+      );
+    }
+    await ctx.reply(lines.join('\n'), menuKeyboard(ctx));
+  });
+
+  const awaitingWdUpdate = new Map();
+  bot.hears('🔄 Cập nhật rút', async (ctx) => {
+    if (!isAdminId(ctx.from.id)) {
+      await ctx.reply('Bạn không có quyền dùng chức năng này.', menuKeyboard(ctx));
+      return;
+    }
+    awaitingWdUpdate.set(ctx.from.id, { stage: 'enter_id' });
+    await ctx.reply('Nhập ID rút tiền (ví dụ: WDxxxxxxxx):', Markup.keyboard([['❌ Hủy']]).resize());
+  });
+
+  bot.hears('Đã rút', async (ctx, next) => {
+    const st = awaitingWdUpdate.get(ctx.from.id);
+    if (!st || st.stage !== 'choose_status') return next();
+    const w = db.getWithdrawalById(st.id);
+    if (!w) return;
+    if (w.status !== 'done') {
+       if (w.status === 'reject') {
+         const u = db.getUser(w.userId);
+         db.updateUser(w.userId, { balance: u.balance - Number(w.amount) }); // deduct back
+       }
+       db.updateWithdrawalStatus(st.id, 'done');
+    }
+    awaitingWdUpdate.delete(ctx.from.id);
+    await ctx.reply(`Đã cập nhật ${st.id} → đã rút.`, menuKeyboard(ctx));
+    if (w.userId) {
+      try {
+        await bot.telegram.sendMessage(w.userId, `Yêu cầu rút tiền ${w.id} đã được xử lý (Đã rút).`);
+      } catch (_) {}
+    }
+  });
+
+  bot.hears('Chưa rút', async (ctx, next) => {
+    const st = awaitingWdUpdate.get(ctx.from.id);
+    if (!st || st.stage !== 'choose_status') return next();
+    const w = db.getWithdrawalById(st.id);
+    if (!w) return;
+    if (w.status === 'reject') {
+       const u = db.getUser(w.userId);
+       db.updateUser(w.userId, { balance: u.balance - Number(w.amount) }); // deduct back
+    }
+    db.updateWithdrawalStatus(st.id, 'pending');
+    awaitingWdUpdate.delete(ctx.from.id);
+    await ctx.reply(`Đã cập nhật ${st.id} → chưa rút (pending).`, menuKeyboard(ctx));
+    if (w.userId) {
+      try {
+        await bot.telegram.sendMessage(w.userId, `Yêu cầu rút tiền ${w.id} đang chờ xử lý.`);
+      } catch (_) {}
+    }
+  });
+
+  bot.hears('Từ chối', async (ctx, next) => {
+    const st = awaitingWdUpdate.get(ctx.from.id);
+    if (!st || st.stage !== 'choose_status') return next();
+    const w = db.getWithdrawalById(st.id);
+    if (!w) return;
+    if (w.status !== 'reject') {
+       const u = db.getUser(w.userId);
+       db.updateUser(w.userId, { balance: u.balance + Number(w.amount) }); // refund
+    }
+    db.updateWithdrawalStatus(st.id, 'reject');
+    awaitingWdUpdate.delete(ctx.from.id);
+    await ctx.reply(`Đã cập nhật ${st.id} → Từ chối (đã hoàn tiền).`, menuKeyboard(ctx));
+    if (w.userId) {
+      try {
+        await bot.telegram.sendMessage(w.userId, `Yêu cầu rút tiền ${w.id} đã bị từ chối và hoàn tiền.`);
+      } catch (_) {}
+    }
+  });
+
+  function formatStatus(id) {
+    const s = requestStatus.get(id) || db.getByRequestId(id);
+    if (!s) return 'Không tìm thấy requestId này.';
+    const lines = [];
+    lines.push(`RequestId: ${id}`);
+    lines.push(`Trạng thái: ${s.status}`);
+    if (s.name) lines.push(`Tên: ${s.name}`);
+    if (s.customerName) lines.push(`KH: ${s.customerName}`);
+    if (s.vaAccount) lines.push(`STK: ${s.vaAccount}`);
+    if (s.amount) lines.push(`Số tiền: ${s.amount}`);
+    if (s.vaBank) lines.push(`Ngân hàng: ${s.vaBank}`);
+    if (s.remark) lines.push(`Remark: ${s.remark}`);
+    if (s.transactionId) lines.push(`Transaction: ${s.transactionId}`);
+    if (s.cashinId) lines.push(`CASHIN: ${s.cashinId}`);
+    if (s.timePaid) lines.push(`TimePaid: ${s.timePaid}`);
+    return lines.join('\n');
+  }
+
+  bot.hears('🔎 Trạng thái', async (ctx) => {
+    awaitingStatus.set(ctx.from.id, true);
+    await ctx.reply('Nhập clientRequestId để tra cứu:');
+  });
+
+  bot.command('status', async (ctx) => {
+    const txt = ctx.message?.text || '';
+    const parts = txt.split(/\s+/);
+    const id = parts[1];
+    if (!id) {
+      await ctx.reply('Cú pháp: /status <clientRequestId>', menuKeyboard());
+      return;
+    }
+    await ctx.reply(formatStatus(id), menuKeyboard(ctx));
+  });
+
+  bot.on('text', async (ctx, next) => {
+    const text = ctx.message?.text || '';
+    
+    const rnSt = randomNameState.get(ctx.from.id);
+    if (rnSt) {
+      if (isMenuText(text)) return next();
+      if (rnSt.stage === 'enter_prefix') {
+        const prefix = text.trim();
+        if (prefix.length === 0) {
+          await ctx.reply('Họ và Tên đệm không được để trống. Nhập lại:', Markup.keyboard([['❌ Hủy']]).resize());
+          return;
+        }
+        randomNameState.set(ctx.from.id, { stage: 'choose_gender', prefix });
+        await ctx.reply('Vui lòng chọn giới tính:', Markup.keyboard([['👨 Nam', '👩 Nữ'], ['❌ Hủy']]).resize());
+        return;
+      }
+    }
+
+    const upd = (id) => awaitingWdUpdate.set(ctx.from.id, { stage: 'choose_status', id });
+    const wdU = awaitingWdUpdate.get(ctx.from.id);
+    if (wdU) {
+      if (isMenuText(text)) return next();
+      if (wdU.stage === 'enter_id') {
+        const id = text.trim();
+        const w = db.getWithdrawalById(id);
+        if (!id || !w) {
+          await ctx.reply('ID không hợp lệ hoặc không tồn tại. Nhập lại:', Markup.keyboard([['❌ Hủy']]).resize());
+          return;
+        }
+        await ctx.reply(
+          `ID: ${w.id}\nPhương thức: ${w.method}\n` +
+            (w.method === 'bank'
+              ? `Ngân hàng: ${w.bankName}\nSTK: ${w.bankAccount}\nChủ TK: ${w.bankHolder}\n`
+              : `Network: ${w.network}\nVí: ${w.wallet}\n`) +
+            `Số tiền: ${w.amount}\nTrạng thái hiện tại: ${w.status}\nChọn trạng thái mới:`,
+          Markup.keyboard([['Đã rút', 'Chưa rút', 'Từ chối'], ['❌ Hủy']]).resize()
+        );
+        upd(id);
+        return;
+      }
+    }
+    const wst = withdrawState.get(ctx.from.id);
+    if (wst) {
+      if (isMenuText(text)) return next();
+      if (wst.stage === 'bank_name') {
+        withdrawState.set(ctx.from.id, { ...wst, stage: 'bank_account', bankName: text.trim().slice(0, 50) });
+        await ctx.reply('Nhập số tài khoản:', Markup.keyboard([['❌ Hủy']]).resize());
+        return;
+      }
+      if (wst.stage === 'bank_account') {
+        withdrawState.set(ctx.from.id, { ...wst, stage: 'bank_holder', bankAccount: text.trim().slice(0, 64) });
+        await ctx.reply('Nhập tên chủ tài khoản:', Markup.keyboard([['❌ Hủy']]).resize());
+        return;
+      }
+      if (wst.stage === 'bank_holder') {
+        withdrawState.set(ctx.from.id, { ...wst, stage: 'amount', bankHolder: text.trim().slice(0, 100) });
+        await ctx.reply('Nhập số tiền rút:', Markup.keyboard([['Rút ALL'], ['❌ Hủy']]).resize());
+        return;
+      }
+      if (wst.stage === 'usdt_network') {
+        withdrawState.set(ctx.from.id, { ...wst, stage: 'usdt_wallet', network: text.trim().toUpperCase().slice(0, 10) });
+        await ctx.reply('Nhập địa chỉ ví USDT:', Markup.keyboard([['❌ Hủy']]).resize());
+        return;
+      }
+      if (wst.stage === 'usdt_wallet') {
+        withdrawState.set(ctx.from.id, { ...wst, stage: 'amount', wallet: text.trim().slice(0, 120) });
+        await ctx.reply('Nhập số tiền rút:', Markup.keyboard([['Rút ALL'], ['❌ Hủy']]).resize());
+        return;
+      }
+      if (wst.stage === 'amount') {
+        let amount;
+        if (text === 'Rút ALL') {
+          amount = wst.balance;
+        } else {
+          amount = Number(text.replace(/[^\d]/g, ''));
+        }
+
+        if (!amount || amount <= 0) {
+          await ctx.reply('Số tiền không hợp lệ. Nhập lại:', Markup.keyboard([['Rút ALL'], ['❌ Hủy']]).resize());
+          return;
+        }
+        
+        // Cập nhật lại số dư mới nhất từ DB để tránh lỗi đồng bộ
+        const user = db.getUser(ctx.from.id);
+        if (amount > user.balance) {
+          await ctx.reply(`Số dư không đủ. Bạn chỉ có ${user.balance.toLocaleString()}đ. Nhập lại:`, Markup.keyboard([['Rút ALL'], ['❌ Hủy']]).resize());
+          return;
+        }
+        
+        const config = db.getConfig();
+        const feePercent = user.feePercent !== null ? user.feePercent : config.globalFeePercent;
+        const actualReceive = amount - (amount * feePercent / 100);
+
+        db.updateUser(ctx.from.id, { balance: user.balance - amount });
+
+        const id = `WD${Date.now().toString().slice(-10)}${Math.floor(100000 + Math.random() * 900000)}`;
+        const rec = {
+          id,
+          userId: ctx.from.id,
+          username: ctx.from.username || '',
+          method: wst.method,
+          bankName: wst.bankName,
+          bankAccount: wst.bankAccount,
+          bankHolder: wst.bankHolder,
+          network: wst.network,
+          wallet: wst.wallet,
+          amount,
+          feePercent,
+          actualReceive,
+          createdAt: Date.now(),
+          status: 'pending',
+        };
+        db.addWithdrawal(rec);
+        withdrawState.delete(ctx.from.id);
+        await ctx.reply(
+          `Đã tạo yêu cầu rút tiền\nID: ${id}\nPhương thức: ${rec.method}\n` +
+          (rec.method === 'bank'
+            ? `Ngân hàng: ${rec.bankName}\nSTK: ${rec.bankAccount}\nChủ TK: ${rec.bankHolder}\n`
+            : `Network: ${rec.network}\nVí: ${rec.wallet}\n`) +
+          `Số dư bị trừ: ${amount.toLocaleString()}đ\nPhí rút: ${feePercent}%\nThực nhận: ${actualReceive.toLocaleString()}đ\nTrạng thái: pending`,
+          menuKeyboard(ctx)
+        );
+        const adminRaw = process.env.ADMIN_IDS || '';
+        const adminIds = adminRaw.split(',').map((s) => s.trim()).filter(Boolean);
+        for (const aid of adminIds) {
+          try {
+            await bot.telegram.sendMessage(
+              aid,
+              `Yêu cầu rút tiền mới\nID: ${id}\nUser: ${ctx.from.username || ctx.from.id}\nSố dư user: ${user.balance.toLocaleString()}đ\n` +
+              (rec.method === 'bank'
+                ? `Ngân hàng: ${rec.bankName}\nSTK: ${rec.bankAccount}\nChủ TK: ${rec.bankHolder}\n`
+                : `Network: ${rec.network}\nVí: ${rec.wallet}\n`) +
+              `Số tiền trừ: ${amount.toLocaleString()}đ\nThực nhận: ${actualReceive.toLocaleString()}đ`
+            );
+          } catch (_) {}
+        }
+        return;
+      }
+    }
+    if (awaitingName.get(ctx.from.id)) {
+      if (isMenuText(text)) {
+        awaitingName.delete(ctx.from.id);
+        return next();
+      }
+      awaitingName.delete(ctx.from.id);
+      const name = text;
+      if (name.trim().length === 0) {
+        await ctx.reply('Tên trống, vui lòng nhập lại.', menuKeyboard(ctx));
+        return;
+      }
+      
+      confirmCreateState.set(ctx.from.id, name);
+      await ctx.reply(`Bạn chuẩn bị tạo VA với tên: *${name}*\n\nVui lòng xác nhận:`, {
+        parse_mode: 'Markdown',
+        reply_markup: Markup.keyboard([['✅ Xác nhận tạo', '❌ Hủy']]).resize().reply_markup
+      });
+      return;
+    }
+    if (awaitingCustomer.get(ctx.from.id)) {
+      if (isMenuText(text)) {
+        awaitingCustomer.delete(ctx.from.id);
+        return next();
+      }
+      const id = awaitingCustomer.get(ctx.from.id);
+      awaitingCustomer.delete(ctx.from.id);
+      const customerName = text.trim().slice(0, 100);
+      const s = requestStatus.get(id) || {};
+      const newS = { ...s, customerName };
+      requestStatus.set(id, newS);
+      const rec = db.getByRequestId(id) || {};
+      db.upsert({ ...rec, requestId: id, customerName });
+      await ctx.reply(formatStatus(id), menuKeyboard(ctx));
+      return;
+    }
+    if (awaitingStatus.get(ctx.from.id)) {
+      if (isMenuText(text)) {
+        awaitingStatus.delete(ctx.from.id);
+        return next();
+      }
+      awaitingStatus.delete(ctx.from.id);
+      const id = text.trim();
+      if (!id) {
+        await ctx.reply('clientRequestId trống.', menuKeyboard(ctx));
+        return;
+      }
+      await ctx.reply(formatStatus(id), menuKeyboard(ctx));
+      return;
+    }
+    return next();
+  });
+
+  bot.launch();
+
+  process.once('SIGINT', () => bot.stop('SIGINT'));
+  process.once('SIGTERM', () => bot.stop('SIGTERM'));
+}
