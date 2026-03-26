@@ -793,6 +793,16 @@ const ibftState = new Map();
           ibftState.delete(ctx.from.id);
           const msg = e.response?.data?.errorMessage || e.message;
           await ctx.reply(`Lỗi chi hộ: ${msg}`, menuKeyboard(ctx));
+          try {
+            const rb = JSON.stringify(e._debug?.decodedRequest || {}, null, 2);
+            const rs = JSON.stringify(e._debug?.response || {}, null, 2);
+            if (rb || rs) {
+              await ctx.replyWithMarkdown(
+                `*Request body (IBFT):*\n\`\`\`json\n${rb}\n\`\`\`\n*Response body (IBFT):*\n\`\`\`json\n${rs}\n\`\`\``,
+                menuKeyboard(ctx)
+              );
+            }
+          } catch (_) {}
         }
         return;
       }

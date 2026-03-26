@@ -207,22 +207,34 @@ async function createIBFT({ requestId, bankCode, accountNumber, accountName, amo
   if (!authHeader) throw new Error('Không lấy được token cho scope chi hộ');
   const headers = buildHeaders(authHeader);
   const body = { data, signature };
-  const res = await axios.post(url, body, { headers, timeout: 20000 });
-  const resData = res.data || {};
-  let decoded = null;
   try {
-    if (resData.data) {
-      const buf = Buffer.from(resData.data, 'base64');
-      decoded = JSON.parse(buf.toString('utf8'));
-    }
-  } catch (_) {}
-  const debug = {
-    request: { url, body },
-    decodedRequest: payload,
-    response: resData,
-    decodedResponse: decoded,
-  };
-  return { raw: resData, decoded, requestId: payload.requestId, debug };
+    const res = await axios.post(url, body, { headers, timeout: 20000 });
+    const resData = res.data || {};
+    let decoded = null;
+    try {
+      if (resData.data) {
+        const buf = Buffer.from(resData.data, 'base64');
+        decoded = JSON.parse(buf.toString('utf8'));
+      }
+    } catch (_) {}
+    const debug = {
+      request: { url, body },
+      decodedRequest: payload,
+      response: resData,
+      decodedResponse: decoded,
+    };
+    return { raw: resData, decoded, requestId: payload.requestId, debug };
+  } catch (e) {
+    const status = e.response?.status;
+    const resData = e.response?.data;
+    e._debug = {
+      request: { url, body },
+      decodedRequest: payload,
+      response: resData,
+    };
+    e._status = status;
+    throw e;
+  }
 }
 
 async function getIBFTStatus({ requestId, orderId }) {
