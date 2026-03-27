@@ -197,12 +197,21 @@ if (!bot) {
     try {
       let midOverride = undefined;
       let passOverride = undefined;
+      let clientIdOverride = undefined;
+      let clientSecretOverride = undefined;
+      let xApiMidOverride = undefined;
       if (bankCode === 'MSB') {
         midOverride = (process.env.HPAY_MERCHANT_ID_MSB || '').trim() || undefined;
         passOverride = (process.env.HPAY_PASSCODE_MSB || '').trim() || undefined;
+        clientIdOverride = (process.env.HPAY_CLIENT_ID_MSB || '').trim() || undefined;
+        clientSecretOverride = (process.env.HPAY_CLIENT_SECRET_MSB || '').trim() || undefined;
+        xApiMidOverride = (process.env.HPAY_X_API_MID_MSB || '').trim() || undefined;
       } else if (bankCode === 'KLB') {
         midOverride = (process.env.HPAY_MERCHANT_ID_KLB || '').trim() || undefined;
         passOverride = (process.env.HPAY_PASSCODE_KLB || '').trim() || undefined;
+        clientIdOverride = (process.env.HPAY_CLIENT_ID_KLB || '').trim() || undefined;
+        clientSecretOverride = (process.env.HPAY_CLIENT_SECRET_KLB || '').trim() || undefined;
+        xApiMidOverride = (process.env.HPAY_X_API_MID_KLB || '').trim() || undefined;
       }
       const { decoded, raw } = await createVirtualAccount({
         requestId,
@@ -213,6 +222,9 @@ if (!bot) {
         bankCode,
         merchantIdOverride: midOverride,
         passcodeOverride: passOverride,
+        clientIdOverride,
+        clientSecretOverride,
+        xApiMidOverride,
       });
       requestToChat.set(requestId, ctx.chat.id);
       const baseStatus = {
@@ -812,6 +824,24 @@ const ibftState = new Map();
           }
           const remark = `TG ${ctx.from.username || ctx.from.id}`.replace(/[^A-Za-z0-9 ]+/g, ' ').slice(0, 50);
           const callbackUrl = (process.env.IBFT_CALLBACK_URL || '').trim();
+          let merchantIdOverride = undefined;
+          let passcodeOverride = undefined;
+          let clientIdOverride = undefined;
+          let clientSecretOverride = undefined;
+          let xApiMidOverride = undefined;
+          if (ibft.bankCode === 'MSB') {
+            merchantIdOverride = (process.env.HPAY_MERCHANT_ID_MSB || '').trim() || undefined;
+            passcodeOverride = (process.env.HPAY_PASSCODE_MSB || '').trim() || undefined;
+            clientIdOverride = (process.env.HPAY_CLIENT_ID_MSB || '').trim() || undefined;
+            clientSecretOverride = (process.env.HPAY_CLIENT_SECRET_MSB || '').trim() || undefined;
+            xApiMidOverride = (process.env.HPAY_X_API_MID_MSB || '').trim() || undefined;
+          } else if (ibft.bankCode === 'KLB') {
+            merchantIdOverride = (process.env.HPAY_MERCHANT_ID_KLB || '').trim() || undefined;
+            passcodeOverride = (process.env.HPAY_PASSCODE_KLB || '').trim() || undefined;
+            clientIdOverride = (process.env.HPAY_CLIENT_ID_KLB || '').trim() || undefined;
+            clientSecretOverride = (process.env.HPAY_CLIENT_SECRET_KLB || '').trim() || undefined;
+            xApiMidOverride = (process.env.HPAY_X_API_MID_KLB || '').trim() || undefined;
+          }
           const { decoded, raw, debug } = await createIBFT({
             bankCode: ibft.bankCode,
             bankName: ibft.bankCode,
@@ -820,6 +850,11 @@ const ibftState = new Map();
             amount,
             remark,
             callbackUrl,
+            merchantIdOverride,
+            passcodeOverride,
+            clientIdOverride,
+            clientSecretOverride,
+            xApiMidOverride,
           });
           ibftState.delete(ctx.from.id);
           const lines = [];

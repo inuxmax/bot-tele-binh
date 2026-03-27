@@ -36,8 +36,8 @@ function signRSASHA256(message, privateKey) {
   return signer.sign(privateKey, 'base64');
 }
 
-function buildHeaders(authHeader) {
-  const mid = process.env.HPAY_X_API_MID || '';
+function buildHeaders(authHeader, midOverride) {
+  const mid = (midOverride || process.env.HPAY_X_API_MID || '').trim();
   const rawAuth = typeof authHeader === 'string' ? authHeader : process.env.HPAY_AUTH_TOKEN || '';
   const auth =
     rawAuth.toLowerCase().startsWith('bearer ') ? rawAuth : rawAuth ? `Bearer ${rawAuth}` : '';
@@ -48,7 +48,7 @@ function buildHeaders(authHeader) {
   };
 }
 
-async function createVirtualAccount({ requestId, vaName, vaType = '1', vaCondition = '2', vaAmount, remark, vaExpirationTime, bankCode, merchantIdOverride, passcodeOverride }) {
+async function createVirtualAccount({ requestId, vaName, vaType = '1', vaCondition = '2', vaAmount, remark, vaExpirationTime, bankCode, merchantIdOverride, passcodeOverride, clientIdOverride, clientSecretOverride, xApiMidOverride }) {
   const baseUrl = process.env.HPAY_BASE_URL || 'https://openapi-sandbox.htpgroup.com.vn';
   const url = `${baseUrl}/service/va/v1/create`;
 
@@ -88,7 +88,11 @@ async function createVirtualAccount({ requestId, vaName, vaType = '1', vaConditi
 
   let authHeader = '';
   try {
-    const tokenResp = await getAccessToken(process.env.HPAY_TOKEN_SCOPE || 'va');
+    const tokenResp = await getAccessToken(process.env.HPAY_TOKEN_SCOPE || 'va', {
+      clientId: clientIdOverride,
+      clientSecret: clientSecretOverride,
+      mid: xApiMidOverride,
+    });
     if (tokenResp && tokenResp.access_token) {
       authHeader = `Bearer ${tokenResp.access_token}`;
     }
@@ -98,7 +102,7 @@ async function createVirtualAccount({ requestId, vaName, vaType = '1', vaConditi
     const rawAuth = process.env.HPAY_AUTH_TOKEN || '';
     authHeader = rawAuth.toLowerCase().startsWith('bearer ') ? rawAuth : rawAuth ? `Bearer ${rawAuth}` : '';
   }
-  const headers = buildHeaders(authHeader);
+  const headers = buildHeaders(authHeader, xApiMidOverride);
   const body = { data, signature };
 
   const res = await axios.post(url, body, { headers, timeout: 20000 });
@@ -167,12 +171,12 @@ async function getAccountBalance({ requestId } = {}) {
   return { raw: resData, decoded, requestId: payload.requestId };
 }
 
-async function createIBFT({ requestId, bankCode, bankName, accountNumber, accountName, amount, remark, callbackUrl, orderCode }) {
+async function createIBFT({ requestId, bankCode, bankName, accountNumber, accountName, amount, remark, callbackUrl, orderCode, merchantIdOverride, passcodeOverride, clientIdOverride, clientSecretOverride, xApiMidOverride }) {
   const baseUrl = process.env.HPAY_BASE_URL || 'https://openapi-sandbox.htpgroup.com.vn';
   const path = process.env.HPAY_IBFT_PATH || '/service/firm/v1/transfer';
   const url = `${baseUrl}${path}`;
-  const merchantId = process.env.HPAY_MERCHANT_ID || '';
-  const passcode = process.env.HPAY_PASSCODE || '';
+  const merchantId = merchantIdOverride || process.env.HPAY_MERCHANT_ID || '';
+  const passcode = passcodeOverride || process.env.HPAY_PASSCODE || '';
   const privateKey = readPrivateKey();
   if (!privateKey) throw new Error('Không tìm thấy private key');
   try { crypto.createPrivateKey({ key: privateKey, format: 'pem' }); } catch (_) { throw new Error('Private key không hợp lệ (PEM)'); }
@@ -195,10 +199,14 @@ async function createIBFT({ requestId, bankCode, bankName, accountNumber, accoun
   }
   if (!signature) throw new Error('Thiếu chữ ký');
   let authHeader = '';
-  const tokenResp = await getAccessToken(process.env.HPAY_FIRM_SCOPE || 'firm');
+  const tokenResp = await getAccessToken(process.env.HPAY_FIRM_SCOPE || 'firm', {
+    clientId: clientIdOverride,
+    clientSecret: clientSecretOverride,
+    mid: xApiMidOverride,
+  });
   if (tokenResp && tokenResp.access_token) authHeader = `Bearer ${tokenResp.access_token}`;
   if (!authHeader) throw new Error('Không lấy được token cho scope chi hộ');
-  const headers = buildHeaders(authHeader);
+  const headers = buildHeaders(authHeader, xApiMidOverride);
   const body = { data, signature };
   try {
     const res = await axios.post(url, body, { headers, timeout: 20000 });
