@@ -44,7 +44,7 @@ function menuKeyboard(ctx) {
 }
 
 function isMenuText(t) {
-  return t === '🎲 Random tên' || t === '✍️ Nhập tên' || t === '🔑 Lấy token' || t === '💰 Số dư' || t === '🔎 Trạng thái' || t === '💸 Rút tiền' || t === '📋 DS rút' || t === '🔄 Cập nhật rút' || t === '⚙️ Quản lý' || t === '🗂 VA đã tạo' || t === 'ℹ️ Thông tin' || t === '🏦 Bank' || t === '🪙 USDT' || t === 'Đã rút' || t === 'Chưa rút' || t === 'Từ chối' || t === 'Rút ALL' || t === '✅ Xác nhận tạo' || t === '❌ Hủy' || t === '/menu' || t === '/start' || t === '🏧 Chi hộ';
+  return t === '🎲 Random tên' || t === '✍️ Nhập tên' || t === '🔑 Lấy token' || t === '💰 Số dư' || t === '🔎 Trạng thái' || t === '💸 Rút tiền' || t === '📋 DS rút' || t === '🔄 Cập nhật rút' || t === '⚙️ Quản lý' || t === '🗂 VA đã tạo' || t === 'ℹ️ Thông tin' || t === '🏦 Bank' || t === '🪙 USDT' || t === 'Đã rút' || t === 'Chưa rút' || t === 'Từ chối' || t === 'Rút ALL' || t === '✅ Xác nhận tạo' || t === '❌ Hủy' || t === '/menu' || t === '/start' || t === '🏧 Chi hộ' || t === '🏦 MSB' || t === '🏦 KLB' || t === '🏦 BIDV (BẢO TRÌ)';
 }
 
 const app = express();
@@ -174,7 +174,7 @@ if (!bot) {
       ]);
     } catch (_) {}
   })();
-  async function handleCreateVA(ctx, name) {
+  async function handleCreateVA(ctx, name, bankCode) {
     const user = db.getUser(ctx.from.id);
     if (!isAdminId(ctx.from.id) && user.vaLimit !== null && user.createdVA >= user.vaLimit) {
       await ctx.reply(`Bạn đã đạt giới hạn tạo VA (${user.vaLimit}). Vui lòng liên hệ Admin.`, menuKeyboard(ctx));
@@ -193,14 +193,26 @@ if (!bot) {
       .trim();
     if (!remark) remark = `REQ ${requestId}`;
     remark = remark.slice(0, 50);
-    await ctx.reply(`Đang tạo VA cho: ${safeName} ...`);
+    await ctx.reply(`Đang tạo VA cho: ${safeName} (${bankCode || 'Tự động'}) ...`);
     try {
-      const { decoded, raw, debug } = await createVirtualAccount({
+      let midOverride = undefined;
+      let passOverride = undefined;
+      if (bankCode === 'MSB') {
+        midOverride = (process.env.HPAY_MERCHANT_ID_MSB || '').trim() || undefined;
+        passOverride = (process.env.HPAY_PASSCODE_MSB || '').trim() || undefined;
+      } else if (bankCode === 'KLB') {
+        midOverride = (process.env.HPAY_MERCHANT_ID_KLB || '').trim() || undefined;
+        passOverride = (process.env.HPAY_PASSCODE_KLB || '').trim() || undefined;
+      }
+      const { decoded, raw } = await createVirtualAccount({
         requestId,
         vaName: apiName,
         vaType: '1',
         vaCondition: '2',
         remark,
+        bankCode,
+        merchantIdOverride: midOverride,
+        passcodeOverride: passOverride,
       });
       requestToChat.set(requestId, ctx.chat.id);
       const baseStatus = {
@@ -252,12 +264,6 @@ if (!bot) {
         } else if (decoded.qrCode) {
           await ctx.reply(`QR Code:\n${decoded.qrCode}`);
         }
-        const rb = JSON.stringify(debug?.decodedRequest || {}, null, 2);
-        const rs = JSON.stringify(debug?.decodedResponse || debug?.response || {}, null, 2);
-        await ctx.replyWithMarkdown(
-          `*Request body:*\n\`\`\`json\n${rb}\n\`\`\`\n*Response body:*\n\`\`\`json\n${rs}\n\`\`\``,
-          menuKeyboard(ctx)
-        );
       } else {
         await ctx.reply(`Tạo VA không thành công.\nMã lỗi: ${raw.errorCode || 'N/A'}\nThông tin: ${raw.errorMessage || 'N/A'}`, menuKeyboard());
       }
@@ -301,6 +307,7 @@ if (!bot) {
           awaitingStatus.delete(id);
           withdrawState.delete(id);
           confirmCreateState.delete(id);
+          bankSelectionState.delete(id);
           randomNameState.delete(id);
           awaitingWdUpdate.delete(id);
         }
@@ -330,6 +337,7 @@ if (!bot) {
   });
 
 const confirmCreateState = new Map();
+const bankSelectionState = new Map();
 const randomNameState = new Map();
 const ibftState = new Map();
 
@@ -349,8 +357,38 @@ const ibftState = new Map();
       await ctx.reply('Không tìm thấy thông tin xác nhận.', menuKeyboard(ctx));
       return;
     }
+    bankSelectionState.set(ctx.from.id, { name });
     confirmCreateState.delete(ctx.from.id);
-    await handleCreateVA(ctx, name);
+    
+    await ctx.reply('Vui lòng chọn Ngân hàng để tiếp tục tạo:', Markup.keyboard([
+      ['🏦 MSB', '🏦 KLB'],
+      ['🏦 BIDV (BẢO TRÌ)'],
+      ['❌ Hủy']
+    ]).resize());
+  });
+
+  bot.hears('🏦 MSB', async (ctx) => {
+    const state = bankSelectionState.get(ctx.from.id);
+    if (!state) return;
+    bankSelectionState.delete(ctx.from.id);
+    await handleCreateVA(ctx, state.name, 'MSB');
+  });
+
+  bot.hears('🏦 KLB', async (ctx) => {
+    const state = bankSelectionState.get(ctx.from.id);
+    if (!state) return;
+    bankSelectionState.delete(ctx.from.id);
+    await handleCreateVA(ctx, state.name, 'KLB');
+  });
+
+  bot.hears('🏦 BIDV (BẢO TRÌ)', async (ctx) => {
+    const state = bankSelectionState.get(ctx.from.id);
+    if (!state) return;
+    await ctx.reply('Ngân hàng BIDV hiện đang bảo trì. Vui lòng chọn ngân hàng khác:', Markup.keyboard([
+      ['🏦 MSB', '🏦 KLB'],
+      ['🏦 BIDV (BẢO TRÌ)'],
+      ['❌ Hủy']
+    ]).resize());
   });
 
   bot.command('menu', async (ctx) => {
@@ -527,6 +565,8 @@ const ibftState = new Map();
     await ctx.reply(`Danh sách User:\n${lines}`);
   });
 
+
+
   bot.hears('💸 Rút tiền', async (ctx) => {
     const user = db.getUser(ctx.from.id);
     withdrawState.set(ctx.from.id, { stage: 'choose_method', balance: user.balance });
@@ -552,6 +592,7 @@ const ibftState = new Map();
     withdrawState.delete(id);
     awaitingName.delete(id);
     confirmCreateState.delete(id);
+    bankSelectionState.delete(id);
     randomNameState.delete(id);
     ibftState.delete(id);
     awaitingWdUpdate.delete(id);
@@ -764,10 +805,16 @@ const ibftState = new Map();
           return;
         }
         try {
+          const u = db.getUser(ctx.from.id);
+          if (amount > u.balance) {
+            await ctx.reply(`Số dư không đủ. Bạn đang có ${u.balance.toLocaleString()}đ`, menuKeyboard(ctx));
+            return;
+          }
           const remark = `TG ${ctx.from.username || ctx.from.id}`.replace(/[^A-Za-z0-9 ]+/g, ' ').slice(0, 50);
-          const callbackUrl = process.env.IBFT_CALLBACK_URL || '';
+          const callbackUrl = (process.env.IBFT_CALLBACK_URL || '').trim();
           const { decoded, raw, debug } = await createIBFT({
             bankCode: ibft.bankCode,
+            bankName: ibft.bankCode,
             accountNumber: ibft.accountNumber,
             accountName: ibft.accountName,
             amount,
@@ -782,38 +829,12 @@ const ibftState = new Map();
           } else {
             lines.push(`Kết quả: ${raw.errorMessage || 'Unknown'}`);
           }
+          db.updateUser(ctx.from.id, { balance: u.balance - amount });
           await ctx.reply(lines.join('\n') || 'Đã tạo yêu cầu chi hộ.', menuKeyboard(ctx));
-          const rb = JSON.stringify(debug?.decodedRequest || {}, null, 2);
-          const rs = JSON.stringify(debug?.decodedResponse || debug?.response || {}, null, 2);
-          await ctx.replyWithMarkdown(
-            `*Request body:*\n\`\`\`json\n${rb}\n\`\`\`\n*Response body:*\n\`\`\`json\n${rs}\n\`\`\``,
-            menuKeyboard(ctx)
-          );
         } catch (e) {
           ibftState.delete(ctx.from.id);
           const msg = e.response?.data?.errorMessage || e.message;
           await ctx.reply(`Lỗi chi hộ: ${msg}`, menuKeyboard(ctx));
-          try {
-            const fbRemark = `TG ${ctx.from.username || ctx.from.id}`.replace(/[^A-Za-z0-9 ]+/g, ' ').slice(0, 50);
-            const fallbackReq = {
-              requestId: 'AUTO',
-              merchantId: process.env.HPAY_MERCHANT_ID || '',
-              bankCode: ibft.bankCode,
-              accountNumber: ibft.accountNumber,
-              accountName: ibft.accountName,
-              amount,
-              remark: fbRemark,
-              callbackUrl: process.env.IBFT_CALLBACK_URL || '',
-            };
-            const rb = JSON.stringify(e._debug?.decodedRequest || fallbackReq, null, 2);
-            const rs = JSON.stringify(e._debug?.response || e.response?.data || {}, null, 2);
-            if (rb || rs) {
-              await ctx.replyWithMarkdown(
-                `*Request body (IBFT):*\n\`\`\`json\n${rb}\n\`\`\`\n*Response body (IBFT):*\n\`\`\`json\n${rs}\n\`\`\``,
-                menuKeyboard(ctx)
-              );
-            }
-          } catch (_) {}
         }
         return;
       }

@@ -48,12 +48,12 @@ function buildHeaders(authHeader) {
   };
 }
 
-async function createVirtualAccount({ requestId, vaName, vaType = '1', vaCondition = '2', vaAmount, remark, vaExpirationTime }) {
+async function createVirtualAccount({ requestId, vaName, vaType = '1', vaCondition = '2', vaAmount, remark, vaExpirationTime, bankCode, merchantIdOverride, passcodeOverride }) {
   const baseUrl = process.env.HPAY_BASE_URL || 'https://openapi-sandbox.htpgroup.com.vn';
   const url = `${baseUrl}/service/va/v1/create`;
 
-  const merchantId = process.env.HPAY_MERCHANT_ID || '';
-  const passcode = process.env.HPAY_PASSCODE || '';
+  const merchantId = merchantIdOverride || process.env.HPAY_MERCHANT_ID || '';
+  const passcode = passcodeOverride || process.env.HPAY_PASSCODE || '';
   const privateKey = readPrivateKey();
   if (!privateKey) {
     throw new Error('Không tìm thấy private key: cấu hình HPAY_PRIVATE_KEY_B64 hoặc HPAY_PRIVATE_KEY (một dòng với \\n) hoặc HPAY_PRIVATE_KEY_FILE');
@@ -71,6 +71,7 @@ async function createVirtualAccount({ requestId, vaName, vaType = '1', vaConditi
     vaName,
     vaCondition,
   };
+  if (bankCode && String(bankCode).trim() !== '') payload.bankCode = String(bankCode).trim();
   if (vaAmount && String(vaAmount).trim() !== '') payload.vaAmount = String(vaAmount);
   if (remark && remark.trim() !== '') payload.remark = remark;
   if (vaExpirationTime) payload.vaExpirationTime = Number(vaExpirationTime);
@@ -109,16 +110,7 @@ async function createVirtualAccount({ requestId, vaName, vaType = '1', vaConditi
       decoded = JSON.parse(buf.toString('utf8'));
     }
   } catch (_) {}
-  const debug = {
-    request: {
-      url,
-      body,
-    },
-    decodedRequest: payload,
-    response: resData,
-    decodedResponse: decoded,
-  };
-  return { raw: resData, decoded, requestId: payload.requestId, debug };
+  return { raw: resData, decoded, requestId: payload.requestId };
 }
 
 async function getAccountBalance({ requestId } = {}) {
@@ -175,7 +167,7 @@ async function getAccountBalance({ requestId } = {}) {
   return { raw: resData, decoded, requestId: payload.requestId };
 }
 
-async function createIBFT({ requestId, bankCode, accountNumber, accountName, amount, remark, callbackUrl }) {
+async function createIBFT({ requestId, bankCode, bankName, accountNumber, accountName, amount, remark, callbackUrl, orderCode }) {
   const baseUrl = process.env.HPAY_BASE_URL || 'https://openapi-sandbox.htpgroup.com.vn';
   const path = process.env.HPAY_IBFT_PATH || '/service/firm/v1/transfer';
   const url = `${baseUrl}${path}`;
@@ -187,13 +179,14 @@ async function createIBFT({ requestId, bankCode, accountNumber, accountName, amo
   const payload = {
     requestId: requestId || makeRequestId(),
     merchantId,
-    bankCode,
-    accountNumber,
-    accountName,
+    bankName: (bankName && bankName.trim()) || (bankCode && String(bankCode).trim()) || '',
+    bankAccountNumber: accountNumber,
+    bankAccountName: accountName,
     amount: String(amount),
   };
+  if (!orderCode) payload.orderCode = `IBFT${(payload.requestId || '').slice(-12)}`;
   if (remark && remark.trim() !== '') payload.remark = remark.trim();
-  if (callbackUrl && callbackUrl.trim() !== '') payload.callbackUrl = callbackUrl.trim();
+  if (callbackUrl && callbackUrl.trim() !== '') payload.callbackUrl = callbackUrl.trim().replace(/`/g, '');
   const data = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64');
   let signature = '';
   if (privateKey && passcode) {
@@ -217,22 +210,15 @@ async function createIBFT({ requestId, bankCode, accountNumber, accountName, amo
         decoded = JSON.parse(buf.toString('utf8'));
       }
     } catch (_) {}
-    const debug = {
-      request: { url, body },
-      decodedRequest: payload,
-      response: resData,
-      decodedResponse: decoded,
+    return {
+      raw: resData,
+      decoded,
+      requestId: payload.requestId,
+      debug: { request: payload, response: decoded || resData },
     };
-    return { raw: resData, decoded, requestId: payload.requestId, debug };
   } catch (e) {
-    const status = e.response?.status;
-    const resData = e.response?.data;
-    e._debug = {
-      request: { url, body },
-      decodedRequest: payload,
-      response: resData,
-    };
-    e._status = status;
+    const resData = e.response?.data || {};
+    e._debug = { request: payload, response: resData };
     throw e;
   }
 }
