@@ -44,7 +44,7 @@ function menuKeyboard(ctx) {
 }
 
 function isMenuText(t) {
-  return t === '🎲 Random tên' || t === '✍️ Nhập tên' || t === '🔑 Lấy token' || t === '💰 Số dư' || t === '🔎 Trạng thái' || t === '💸 Rút tiền' || t === '📋 DS rút' || t === '🔄 Cập nhật rút' || t === '⚙️ Quản lý' || t === '🗂 VA đã tạo' || t === 'ℹ️ Thông tin' || t === '🏦 Bank' || t === '🪙 USDT' || t === 'Đã rút' || t === 'Chưa rút' || t === 'Từ chối' || t === 'Rút ALL' || t === '✅ Xác nhận tạo' || t === '❌ Hủy' || t === '/menu' || t === '/start' || t === '🏧 Chi hộ' || t === '🏦 MSB' || t === '🏦 KLB' || t === '🏦 BIDV (BẢO TRÌ)';
+  return t === '🎲 Random tên' || t === '✍️ Nhập tên' || t === '🔑 Lấy token' || t === '💰 Số dư' || t === '🔎 Trạng thái' || t === '💸 Rút tiền' || t === '📋 DS rút' || t === '🔄 Cập nhật rút' || t === '⚙️ Quản lý' || t === '🗂 VA đã tạo' || t === 'ℹ️ Thông tin' || t === '🏦 Bank' || t === '🪙 USDT' || t === 'Đã rút' || t === 'Chưa rút' || t === 'Từ chối' || t === 'Rút ALL' || t === '✅ Xác nhận tạo' || t === '✅ Xác nhận chi hộ' || t === '❌ Hủy' || t === '/menu' || t === '/start' || t === '🏧 Chi hộ' || t === '🏦 MSB' || t === '🏦 KLB' || t === '🏦 BIDV (BẢO TRÌ)';
 }
 
 const app = express();
@@ -169,11 +169,23 @@ if (!bot) {
   (async () => {
     try {
       await bot.telegram.setMyCommands([
+        { command: 'start', description: 'Bắt đầu' },
         { command: 'menu', description: 'Mở menu thao tác' },
         { command: 'status', description: 'Tra cứu trạng thái: /status <clientRequestId>' },
+        { command: 'id', description: 'Xem Telegram ID của bạn' },
+        { command: 'users', description: '(Admin) Danh sách user' },
+        { command: 'active', description: '(Admin) Kích hoạt user: /active <id>' },
+        { command: 'deactive', description: '(Admin) Hủy kích hoạt: /deactive <id>' },
+        { command: 'setfee', description: '(Admin) Set phí: /setfee <id|all> <%>' },
+        { command: 'setlimit', description: '(Admin) Set giới hạn VA: /setlimit <id> <số>' },
+        { command: 'firmtoken', description: '(Admin) Lấy token chi hộ' },
       ]);
     } catch (_) {}
   })();
+
+  bot.command('id', async (ctx) => {
+    await ctx.reply(`ID của bạn: ${ctx.from?.id || ''}`, menuKeyboard(ctx));
+  });
   async function handleCreateVA(ctx, name, bankCode) {
     const user = db.getUser(ctx.from.id);
     if (!isAdminId(ctx.from.id) && user.vaLimit !== null && user.createdVA >= user.vaLimit) {
@@ -183,8 +195,8 @@ if (!bot) {
     const safeName = name.trim().slice(0, 50);
     const apiName = safeName.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim();
     const requestId = `${Date.now().toString().slice(-10)}${Math.floor(100000 + Math.random() * 900000).toString()}`.slice(0, 20);
-    const userTag = String(ctx.from.username || ctx.from.id);
-    let remark = `TG ${userTag}`;
+    const rand = crypto.randomBytes(4).toString('hex').toUpperCase();
+    let remark = `ND ${requestId.slice(-6)} ${rand}`;
     remark = remark
       .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
       .replace(/[^A-Za-z0-9 ]+/g, ' ')
@@ -216,7 +228,7 @@ if (!bot) {
       const { decoded, raw } = await createVirtualAccount({
         requestId,
         vaName: apiName,
-        vaType: '1',
+        vaType: '2',
         vaCondition: '2',
         remark,
         bankCode,
@@ -478,14 +490,94 @@ const ibftState = new Map();
       await ctx.reply('Bạn không có quyền dùng chức năng này.', menuKeyboard(ctx));
       return;
     }
-    const bankCode = process.env.IBFT_TEST_BANK_CODE || 'KLB';
-    const accountNumber = process.env.IBFT_TEST_ACCOUNT || '77417777';
-    const accountName = process.env.IBFT_TEST_NAME || 'NGUYEN VAN A';
-    ibftState.set(ctx.from.id, { stage: 'amount', bankCode, accountNumber, accountName });
+    ibftState.set(ctx.from.id, { stage: 'enter_bank' });
     await ctx.reply(
-      `Chi hộ test đến ${bankCode} ${accountNumber} - ${accountName}\nNhập số tiền (VND):`,
-      Markup.keyboard([['❌ Hủy']]).resize()
+      'Nhập mã ngân hàng (Ví dụ: MSB, KLB, BIDV...) hoặc chọn nhanh bên dưới:',
+      Markup.keyboard([['🏦 MSB', '🏦 KLB'], ['❌ Hủy']]).resize()
     );
+  });
+
+  bot.hears('✅ Xác nhận chi hộ', async (ctx) => {
+    if (!isAdminId(ctx.from.id)) {
+      await ctx.reply('Bạn không có quyền dùng chức năng này.', menuKeyboard(ctx));
+      return;
+    }
+    const st = ibftState.get(ctx.from.id);
+    if (!st || st.stage !== 'confirm') return;
+    const bankCode = st.bankCode;
+    const accountNumber = st.accountNumber;
+    const accountName = st.accountName;
+    const amount = st.amount;
+    if (!bankCode || !accountNumber || !accountName || !amount) {
+      ibftState.delete(ctx.from.id);
+      await ctx.reply('Thiếu thông tin chi hộ. Vui lòng thao tác lại.', menuKeyboard(ctx));
+      return;
+    }
+
+    try {
+      const u = db.getUser(ctx.from.id);
+      if (amount > u.balance) {
+        ibftState.delete(ctx.from.id);
+        await ctx.reply(`Số dư không đủ. Bạn đang có ${u.balance.toLocaleString()}đ`, menuKeyboard(ctx));
+        return;
+      }
+      const remark = st.remark || `CH ${Date.now().toString().slice(-8)}`;
+      const callbackUrl = (process.env.IBFT_CALLBACK_URL || '').trim();
+
+      let merchantIdOverride = undefined;
+      let passcodeOverride = undefined;
+      let clientIdOverride = undefined;
+      let clientSecretOverride = undefined;
+      let xApiMidOverride = undefined;
+      if (bankCode === 'MSB') {
+        merchantIdOverride = (process.env.HPAY_MERCHANT_ID_MSB || '').trim() || undefined;
+        passcodeOverride = (process.env.HPAY_PASSCODE_MSB || '').trim() || undefined;
+        clientIdOverride = (process.env.HPAY_CLIENT_ID_MSB || '').trim() || undefined;
+        clientSecretOverride = (process.env.HPAY_CLIENT_SECRET_MSB || '').trim() || undefined;
+        xApiMidOverride = (process.env.HPAY_X_API_MID_MSB || '').trim() || undefined;
+      } else if (bankCode === 'KLB') {
+        merchantIdOverride = (process.env.HPAY_MERCHANT_ID_KLB || '').trim() || undefined;
+        passcodeOverride = (process.env.HPAY_PASSCODE_KLB || '').trim() || undefined;
+        clientIdOverride = (process.env.HPAY_CLIENT_ID_KLB || '').trim() || undefined;
+        clientSecretOverride = (process.env.HPAY_CLIENT_SECRET_KLB || '').trim() || undefined;
+        xApiMidOverride = (process.env.HPAY_X_API_MID_KLB || '').trim() || undefined;
+      }
+
+      const { decoded, raw } = await createIBFT({
+        bankCode,
+        bankName: bankCode,
+        accountNumber,
+        accountName,
+        amount,
+        remark,
+        callbackUrl,
+        merchantIdOverride,
+        passcodeOverride,
+        clientIdOverride,
+        clientSecretOverride,
+        xApiMidOverride,
+      });
+
+      const ok = (decoded && decoded.orderId) || (!raw?.errorCode || raw?.errorCode === '00');
+      if (ok) {
+        db.updateUser(ctx.from.id, { balance: u.balance - amount });
+      }
+
+      ibftState.delete(ctx.from.id);
+      const lines = [];
+      if (decoded && typeof decoded === 'object') {
+        if (decoded.orderId) lines.push(`OrderId: ${decoded.orderId}`);
+        if (decoded.tranStatus) lines.push(`Trạng thái: ${decoded.tranStatus}`);
+      }
+      if (!lines.length) {
+        lines.push(`Kết quả: ${raw?.errorMessage || 'Unknown'}`);
+      }
+      await ctx.reply(lines.join('\n') || 'Đã tạo yêu cầu chi hộ.', menuKeyboard(ctx));
+    } catch (e) {
+      ibftState.delete(ctx.from.id);
+      const msg = e.response?.data?.errorMessage || e.message;
+      await ctx.reply(`Lỗi chi hộ: ${msg}`, menuKeyboard(ctx));
+    }
   });
 
   bot.hears('ℹ️ Thông tin', async (ctx) => {
@@ -809,68 +901,86 @@ const ibftState = new Map();
     }
     const ibft = ibftState.get(ctx.from.id);
     if (ibft) {
-      if (isMenuText(text)) return next();
-      if (ibft.stage === 'amount') {
+      const allowBankPick =
+        ibft.stage === 'enter_bank' && (text === '🏦 MSB' || text === '🏦 KLB' || text === '🏦 BIDV (BẢO TRÌ)');
+      if (isMenuText(text) && !allowBankPick) return next();
+      if (ibft.stage === 'enter_bank') {
+        let raw = text.trim();
+        if (raw.startsWith('🏦')) raw = raw.replace(/^🏦\s*/i, '').trim();
+        raw = raw.replace(/\(.*\)$/g, '').trim();
+        const bankCode = raw
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '')
+          .replace(/[^A-Za-z0-9]/g, '')
+          .trim()
+          .toUpperCase()
+          .slice(0, 10);
+
+        if (!bankCode) {
+          await ctx.reply('Mã ngân hàng không hợp lệ. Nhập lại (Ví dụ: MSB, KLB, BIDV...):', Markup.keyboard([['🏦 MSB', '🏦 KLB'], ['❌ Hủy']]).resize());
+          return;
+        }
+        ibftState.set(ctx.from.id, { ...ibft, stage: 'enter_account', bankCode });
+        await ctx.reply('Nhập số tài khoản nhận:', Markup.keyboard([['❌ Hủy']]).resize());
+        return;
+      }
+
+      if (ibft.stage === 'enter_account') {
+        const accountNumber = String(text).replace(/[^\d]/g, '');
+        if (!accountNumber || accountNumber.length < 6 || accountNumber.length > 24) {
+          await ctx.reply('Số tài khoản không hợp lệ. Nhập lại:', Markup.keyboard([['❌ Hủy']]).resize());
+          return;
+        }
+        ibftState.set(ctx.from.id, { ...ibft, stage: 'enter_name', accountNumber });
+        await ctx.reply('Nhập tên chủ tài khoản:', Markup.keyboard([['❌ Hủy']]).resize());
+        return;
+      }
+
+      if (ibft.stage === 'enter_name') {
+        const accountName = text
+          .trim()
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '')
+          .replace(/[^A-Za-z0-9 ]+/g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim()
+          .toUpperCase()
+          .slice(0, 100);
+
+        if (!accountName) {
+          await ctx.reply('Tên không hợp lệ. Nhập lại:', Markup.keyboard([['❌ Hủy']]).resize());
+          return;
+        }
+        ibftState.set(ctx.from.id, { ...ibft, stage: 'enter_amount', accountName });
+        await ctx.reply('Nhập số tiền (VND):', Markup.keyboard([['❌ Hủy']]).resize());
+        return;
+      }
+
+      if (ibft.stage === 'enter_amount') {
         const amount = Number(String(text).replace(/[^\d]/g, ''));
         if (!amount || amount <= 0) {
           await ctx.reply('Số tiền không hợp lệ. Nhập lại:', Markup.keyboard([['❌ Hủy']]).resize());
           return;
         }
-        try {
-          const u = db.getUser(ctx.from.id);
-          if (amount > u.balance) {
-            await ctx.reply(`Số dư không đủ. Bạn đang có ${u.balance.toLocaleString()}đ`, menuKeyboard(ctx));
-            return;
-          }
-          const remark = `TG ${ctx.from.username || ctx.from.id}`.replace(/[^A-Za-z0-9 ]+/g, ' ').slice(0, 50);
-          const callbackUrl = (process.env.IBFT_CALLBACK_URL || '').trim();
-          let merchantIdOverride = undefined;
-          let passcodeOverride = undefined;
-          let clientIdOverride = undefined;
-          let clientSecretOverride = undefined;
-          let xApiMidOverride = undefined;
-          if (ibft.bankCode === 'MSB') {
-            merchantIdOverride = (process.env.HPAY_MERCHANT_ID_MSB || '').trim() || undefined;
-            passcodeOverride = (process.env.HPAY_PASSCODE_MSB || '').trim() || undefined;
-            clientIdOverride = (process.env.HPAY_CLIENT_ID_MSB || '').trim() || undefined;
-            clientSecretOverride = (process.env.HPAY_CLIENT_SECRET_MSB || '').trim() || undefined;
-            xApiMidOverride = (process.env.HPAY_X_API_MID_MSB || '').trim() || undefined;
-          } else if (ibft.bankCode === 'KLB') {
-            merchantIdOverride = (process.env.HPAY_MERCHANT_ID_KLB || '').trim() || undefined;
-            passcodeOverride = (process.env.HPAY_PASSCODE_KLB || '').trim() || undefined;
-            clientIdOverride = (process.env.HPAY_CLIENT_ID_KLB || '').trim() || undefined;
-            clientSecretOverride = (process.env.HPAY_CLIENT_SECRET_KLB || '').trim() || undefined;
-            xApiMidOverride = (process.env.HPAY_X_API_MID_KLB || '').trim() || undefined;
-          }
-          const { decoded, raw, debug } = await createIBFT({
-            bankCode: ibft.bankCode,
-            bankName: ibft.bankCode,
-            accountNumber: ibft.accountNumber,
-            accountName: ibft.accountName,
-            amount,
-            remark,
-            callbackUrl,
-            merchantIdOverride,
-            passcodeOverride,
-            clientIdOverride,
-            clientSecretOverride,
-            xApiMidOverride,
-          });
-          ibftState.delete(ctx.from.id);
-          const lines = [];
-          if (decoded && typeof decoded === 'object') {
-            if (decoded.orderId) lines.push(`OrderId: ${decoded.orderId}`);
-            if (decoded.tranStatus) lines.push(`Trạng thái: ${decoded.tranStatus}`);
-          } else {
-            lines.push(`Kết quả: ${raw.errorMessage || 'Unknown'}`);
-          }
-          db.updateUser(ctx.from.id, { balance: u.balance - amount });
-          await ctx.reply(lines.join('\n') || 'Đã tạo yêu cầu chi hộ.', menuKeyboard(ctx));
-        } catch (e) {
-          ibftState.delete(ctx.from.id);
-          const msg = e.response?.data?.errorMessage || e.message;
-          await ctx.reply(`Lỗi chi hộ: ${msg}`, menuKeyboard(ctx));
+        const u = db.getUser(ctx.from.id);
+        if (amount > u.balance) {
+          await ctx.reply(`Số dư không đủ. Bạn đang có ${u.balance.toLocaleString()}đ`, menuKeyboard(ctx));
+          return;
         }
+
+        const rand = crypto.randomBytes(4).toString('hex').toUpperCase();
+        const remark = `CH ${String(amount).slice(-4)} ${rand}`.slice(0, 50);
+        ibftState.set(ctx.from.id, { ...ibft, stage: 'confirm', amount, remark });
+
+        await ctx.reply(
+          `Xác nhận chi hộ:\nNgân hàng: ${ibft.bankCode}\nSTK: ${ibft.accountNumber}\nTên: ${ibft.accountName}\nSố tiền: ${amount.toLocaleString()}đ`,
+          Markup.keyboard([['✅ Xác nhận chi hộ', '❌ Hủy']]).resize()
+        );
+        return;
+      }
+
+      if (ibft.stage === 'confirm') {
+        await ctx.reply('Vui lòng bấm “✅ Xác nhận chi hộ” hoặc “❌ Hủy”.', Markup.keyboard([['✅ Xác nhận chi hộ', '❌ Hủy']]).resize());
         return;
       }
     }
