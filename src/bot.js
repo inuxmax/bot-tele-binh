@@ -656,14 +656,135 @@ const bankSelectionState = new Map();
 const randomNameState = new Map();
 const ibftState = new Map();
 
+  function clearUserStates(id) {
+    withdrawState.delete(id);
+    awaitingName.delete(id);
+    confirmCreateState.delete(id);
+    bankSelectionState.delete(id);
+    randomNameState.delete(id);
+    ibftState.delete(id);
+    awaitingWdUpdate.delete(id);
+    awaitingStatus.delete(id);
+  }
+
+  bot.action('cancel', async (ctx) => {
+    try {
+      await ctx.answerCbQuery();
+    } catch (_) {}
+    clearUserStates(ctx.from.id);
+    try {
+      await ctx.editMessageReplyMarkup(undefined);
+    } catch (_) {}
+    await ctx.reply('Đã hủy thao tác.', menuKeyboard(ctx));
+  });
+
+  bot.action(/^rn_pick:(\d+)$/, async (ctx) => {
+    try {
+      await ctx.answerCbQuery();
+    } catch (_) {}
+    const st = randomNameState.get(ctx.from.id);
+    if (!st || st.stage !== 'choose_option') return;
+    const idx = Number(ctx.match[1]);
+    const chosen = Array.isArray(st.options) ? st.options[idx] : '';
+    if (!chosen) return;
+    randomNameState.delete(ctx.from.id);
+    confirmCreateState.set(ctx.from.id, chosen);
+    try {
+      await ctx.editMessageReplyMarkup(undefined);
+    } catch (_) {}
+    await ctx.reply(`Bạn chuẩn bị tạo VA với tên: *${chosen}*\n\nVui lòng xác nhận:`, {
+      parse_mode: 'Markdown',
+      reply_markup: Markup.inlineKeyboard([
+        [Markup.button.callback('✅ Xác nhận tạo', 'va_confirm')],
+        [Markup.button.callback('❌ Hủy', 'cancel')],
+      ]).reply_markup,
+    });
+  });
+
+  bot.action('va_confirm', async (ctx) => {
+    try {
+      await ctx.answerCbQuery();
+    } catch (_) {}
+    const name = confirmCreateState.get(ctx.from.id);
+    if (!name) {
+      await ctx.reply('Không tìm thấy thông tin xác nhận.', menuKeyboard(ctx));
+      return;
+    }
+    bankSelectionState.set(ctx.from.id, { name });
+    confirmCreateState.delete(ctx.from.id);
+    try {
+      await ctx.editMessageReplyMarkup(undefined);
+    } catch (_) {}
+    await ctx.reply('Vui lòng chọn Ngân hàng để tiếp tục tạo:', {
+      reply_markup: Markup.inlineKeyboard([
+        [Markup.button.callback('🏦 MSB', 'va_bank:MSB'), Markup.button.callback('🏦 KLB', 'va_bank:KLB')],
+        [Markup.button.callback('🏦 BIDV (BẢO TRÌ)', 'va_bank:BIDV')],
+        [Markup.button.callback('❌ Hủy', 'cancel')],
+      ]).reply_markup,
+    });
+  });
+
+  bot.action(/^va_bank:(MSB|KLB|BIDV)$/, async (ctx) => {
+    try {
+      await ctx.answerCbQuery();
+    } catch (_) {}
+    const bank = String(ctx.match[1] || '').toUpperCase();
+    const st = bankSelectionState.get(ctx.from.id);
+    if (!st || !st.name) return;
+    if (bank === 'BIDV') {
+      await ctx.reply('Ngân hàng BIDV hiện đang bảo trì. Vui lòng chọn ngân hàng khác.', {
+        reply_markup: Markup.inlineKeyboard([
+          [Markup.button.callback('🏦 MSB', 'va_bank:MSB'), Markup.button.callback('🏦 KLB', 'va_bank:KLB')],
+          [Markup.button.callback('❌ Hủy', 'cancel')],
+        ]).reply_markup,
+      });
+      return;
+    }
+    bankSelectionState.delete(ctx.from.id);
+    try {
+      await ctx.editMessageReplyMarkup(undefined);
+    } catch (_) {}
+    await handleCreateVA(ctx, st.name, bank);
+  });
+
+  bot.action(/^wd_method:(bank|usdt)$/, async (ctx) => {
+    try {
+      await ctx.answerCbQuery();
+    } catch (_) {}
+    const st = withdrawState.get(ctx.from.id);
+    if (!st || st.stage !== 'choose_method') return;
+    const method = ctx.match[1];
+    if (method === 'bank') {
+      withdrawState.set(ctx.from.id, { stage: 'bank_name', method: 'bank' });
+      try {
+        await ctx.editMessageReplyMarkup(undefined);
+      } catch (_) {}
+      await ctx.reply('Nhập tên ngân hàng (ví dụ: KLB, BIDV...):', {
+        reply_markup: Markup.inlineKeyboard([[Markup.button.callback('❌ Hủy', 'cancel')]]).reply_markup,
+      });
+      return;
+    }
+    withdrawState.set(ctx.from.id, { stage: 'usdt_network', method: 'usdt' });
+    try {
+      await ctx.editMessageReplyMarkup(undefined);
+    } catch (_) {}
+    await ctx.reply('Nhập network (TRC20/ERC20/BEP20):', {
+      reply_markup: Markup.inlineKeyboard([[Markup.button.callback('❌ Hủy', 'cancel')]]).reply_markup,
+    });
+  });
+
   bot.hears('🎲 Random tên', async (ctx) => {
     randomNameState.set(ctx.from.id, { stage: 'enter_prefix' });
-    await ctx.reply('Nhập Họ và Tên đệm (Ví dụ: LE VAN):', Markup.keyboard([['❌ Hủy']]).resize());
+    await ctx.reply('Nhập Họ và Tên đệm (Ví dụ: LE VAN):', {
+      reply_markup: Markup.inlineKeyboard([[Markup.button.callback('❌ Hủy', 'cancel')]]).reply_markup,
+    });
   });
 
   bot.hears('✍️ Nhập tên', async (ctx) => {
     awaitingName.set(ctx.from.id, true);
-    await ctx.reply('Vui lòng nhập họ và tên:', Markup.keyboard([['❌ Hủy']]).resize());
+    await ctx.reply('Vui lòng nhập họ và tên:', {
+      reply_markup: Markup.inlineKeyboard([[Markup.button.callback('❌ Hủy', 'cancel')]]).reply_markup,
+    });
   });
 
   bot.hears('✅ Xác nhận tạo', async (ctx) => {
@@ -674,12 +795,13 @@ const ibftState = new Map();
     }
     bankSelectionState.set(ctx.from.id, { name });
     confirmCreateState.delete(ctx.from.id);
-    
-    await ctx.reply('Vui lòng chọn Ngân hàng để tiếp tục tạo:', Markup.keyboard([
-      ['🏦 MSB', '🏦 KLB'],
-      ['🏦 BIDV (BẢO TRÌ)'],
-      ['❌ Hủy']
-    ]).resize());
+    await ctx.reply('Vui lòng chọn Ngân hàng để tiếp tục tạo:', {
+      reply_markup: Markup.inlineKeyboard([
+        [Markup.button.callback('🏦 MSB', 'va_bank:MSB'), Markup.button.callback('🏦 KLB', 'va_bank:KLB')],
+        [Markup.button.callback('🏦 BIDV (BẢO TRÌ)', 'va_bank:BIDV')],
+        [Markup.button.callback('❌ Hủy', 'cancel')],
+      ]).reply_markup,
+    });
   });
 
   bot.hears('🏦 MSB', async (ctx) => {
@@ -966,33 +1088,35 @@ const ibftState = new Map();
   bot.hears('💸 Rút tiền', async (ctx) => {
     const user = db.getUser(ctx.from.id);
     withdrawState.set(ctx.from.id, { stage: 'choose_method', balance: user.balance });
-    await ctx.reply(`Số dư khả dụng: ${user.balance.toLocaleString()}đ\nChọn phương thức rút:`, Markup.keyboard([['🏦 Bank', '🪙 USDT'], ['❌ Hủy']]).resize());
+    await ctx.reply(`Số dư khả dụng: ${user.balance.toLocaleString()}đ\nChọn phương thức rút:`, {
+      reply_markup: Markup.inlineKeyboard([
+        [Markup.button.callback('🏦 Bank', 'wd_method:bank'), Markup.button.callback('🪙 USDT', 'wd_method:usdt')],
+        [Markup.button.callback('❌ Hủy', 'cancel')],
+      ]).reply_markup,
+    });
   });
 
   bot.hears('🏦 Bank', async (ctx, next) => {
     const st = withdrawState.get(ctx.from.id);
     if (!st || st.stage !== 'choose_method') return next();
     withdrawState.set(ctx.from.id, { stage: 'bank_name', method: 'bank' });
-    await ctx.reply('Nhập tên ngân hàng (ví dụ: KLB, BIDV...):', Markup.keyboard([['❌ Hủy']]).resize());
+    await ctx.reply('Nhập tên ngân hàng (ví dụ: KLB, BIDV...):', {
+      reply_markup: Markup.inlineKeyboard([[Markup.button.callback('❌ Hủy', 'cancel')]]).reply_markup,
+    });
   });
 
   bot.hears('🪙 USDT', async (ctx, next) => {
     const st = withdrawState.get(ctx.from.id);
     if (!st || st.stage !== 'choose_method') return next();
     withdrawState.set(ctx.from.id, { stage: 'usdt_network', method: 'usdt' });
-    await ctx.reply('Nhập network (TRC20/ERC20/BEP20):', Markup.keyboard([['❌ Hủy']]).resize());
+    await ctx.reply('Nhập network (TRC20/ERC20/BEP20):', {
+      reply_markup: Markup.inlineKeyboard([[Markup.button.callback('❌ Hủy', 'cancel')]]).reply_markup,
+    });
   });
 
   bot.hears('❌ Hủy', async (ctx) => {
     const id = ctx.from.id;
-    withdrawState.delete(id);
-    awaitingName.delete(id);
-    confirmCreateState.delete(id);
-    bankSelectionState.delete(id);
-    randomNameState.delete(id);
-    ibftState.delete(id);
-    awaitingWdUpdate.delete(id);
-    awaitingStatus.delete(id);
+    clearUserStates(id);
     await ctx.reply('Đã hủy thao tác.', menuKeyboard(ctx));
   });
 
@@ -1138,7 +1262,9 @@ const ibftState = new Map();
           .trim()
           .toUpperCase();
         if (prefix.length === 0) {
-          await ctx.reply('Họ và Tên đệm không được để trống. Nhập lại:', Markup.keyboard([['❌ Hủy']]).resize());
+          await ctx.reply('Họ và Tên đệm không được để trống. Nhập lại:', {
+            reply_markup: Markup.inlineKeyboard([[Markup.button.callback('❌ Hủy', 'cancel')]]).reply_markup,
+          });
           return;
         }
 
@@ -1159,35 +1285,23 @@ const ibftState = new Map();
           }
         }
 
-        const buttons = options.map((n) => [`✅ ${n}`]);
-        buttons.push(['❌ Hủy']);
-
         randomNameState.set(ctx.from.id, { stage: 'choose_option', prefix, options });
         await ctx.reply(
           `Bạn muốn tạo VA với tên gốc *${prefix}*.\nHãy chọn một trong số các tên mở rộng dưới đây:`,
           {
             parse_mode: 'Markdown',
-            reply_markup: Markup.keyboard(buttons).resize().reply_markup,
+            reply_markup: Markup.inlineKeyboard([
+              [Markup.button.callback(`✅ ${options[0]}`, 'rn_pick:0')],
+              [Markup.button.callback(`✅ ${options[1]}`, 'rn_pick:1')],
+              [Markup.button.callback(`✅ ${options[2]}`, 'rn_pick:2')],
+              [Markup.button.callback('❌ Hủy', 'cancel')],
+            ]).reply_markup,
           }
         );
         return;
       }
       if (rnSt.stage === 'choose_option') {
-        const raw = text.trim();
-        const chosen = raw.startsWith('✅') ? raw.replace(/^✅\s*/, '') : raw;
-        const ok = Array.isArray(rnSt.options) && rnSt.options.includes(chosen);
-        if (!ok) {
-          const buttons = (rnSt.options || []).map((n) => [`✅ ${n}`]);
-          buttons.push(['❌ Hủy']);
-          await ctx.reply('Vui lòng chọn 1 tên trong danh sách:', Markup.keyboard(buttons).resize());
-          return;
-        }
-        randomNameState.delete(ctx.from.id);
-        confirmCreateState.set(ctx.from.id, chosen);
-        await ctx.reply(`Bạn chuẩn bị tạo VA với tên: *${chosen}*\n\nVui lòng xác nhận:`, {
-          parse_mode: 'Markdown',
-          reply_markup: Markup.keyboard([['✅ Xác nhận tạo', '❌ Hủy']]).resize().reply_markup
-        });
+        await ctx.reply('Vui lòng bấm chọn 1 tên ở các nút bên dưới tin nhắn.', menuKeyboard(ctx));
         return;
       }
     }
@@ -1456,7 +1570,10 @@ const ibftState = new Map();
       confirmCreateState.set(ctx.from.id, name);
       await ctx.reply(`Bạn chuẩn bị tạo VA với tên: *${name}*\n\nVui lòng xác nhận:`, {
         parse_mode: 'Markdown',
-        reply_markup: Markup.keyboard([['✅ Xác nhận tạo', '❌ Hủy']]).resize().reply_markup
+        reply_markup: Markup.inlineKeyboard([
+          [Markup.button.callback('✅ Xác nhận tạo', 'va_confirm')],
+          [Markup.button.callback('❌ Hủy', 'cancel')],
+        ]).reply_markup
       });
       return;
     }
