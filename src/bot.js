@@ -27,6 +27,16 @@ function isAdminId(id) {
   return ids.includes(String(id));
 }
 
+function syncUsernameFromCtx(ctx) {
+  try {
+    const id = ctx?.from?.id;
+    const username = ctx?.from?.username ? String(ctx.from.username).trim() : '';
+    if (!id || !username) return;
+    const u = db.getUser(id);
+    if (String(u.username || '') !== username) db.updateUser(id, { username });
+  } catch (_) {}
+}
+
 function canUseIbft(id) {
   const allow = String(process.env.IBFT_ADMIN_IDS || '').trim();
   if (allow) {
@@ -939,6 +949,7 @@ if (!bot) {
   }
 
   bot.use(async (ctx, next) => {
+    syncUsernameFromCtx(ctx);
     if (ctx.from && !isAdminId(ctx.from.id)) {
       const u = db.getUser(ctx.from.id);
       if (!u.isActive) {
@@ -965,6 +976,7 @@ if (!bot) {
 
   bot.use(async (ctx, next) => {
     if (ctx.message && ctx.message.text) {
+      syncUsernameFromCtx(ctx);
       const text = ctx.message.text.split('@')[0];
       if (MAIN_MENU_CMDS.includes(text)) {
         const id = ctx.from?.id;
@@ -984,6 +996,7 @@ if (!bot) {
 
   bot.start(async (ctx) => {
     await syncCommandMenuForChat(ctx);
+    syncUsernameFromCtx(ctx);
     const sendGuide = async () => {
       const guideMsg =
         `📌 HƯỚNG DẪN LẤY BANK (Cách sử dụng)\n\n` +
@@ -1760,6 +1773,8 @@ const ibftState = new Map();
         const lines = [];
         lines.push('👤 *THÔNG TIN USER*');
         lines.push('');
+      const uname = String(u.username || '').trim();
+      if (uname) lines.push(`👤 Username: *@${escapeMd(uname)}*`);
         lines.push(`🆔 ID: \`${u.id}\``);
         lines.push(`📌 Trạng thái: *${u.isActive ? 'ACTIVE' : 'INACTIVE'}*`);
         lines.push(`💰 Số dư: *${Number(u.balance || 0).toLocaleString()}đ*`);
@@ -1791,13 +1806,15 @@ const ibftState = new Map();
     lines.push(`👥 Danh sách User (${p}/${pageCount})`);
     lines.push('');
     for (const u of slice) {
+      const uname = String(u.username || '').trim();
+      const unameStr = uname ? `@${uname}` : '-';
       const feePercent = u.feePercent !== null ? u.feePercent : config.globalFeePercent;
       const ipnFeeUser = u.ipnFeeFlat !== null && u.ipnFeeFlat !== undefined ? Number(u.ipnFeeFlat) : NaN;
       const wdFeeUser = u.withdrawFeeFlat !== null && u.withdrawFeeFlat !== undefined ? Number(u.withdrawFeeFlat) : NaN;
       const ipnFee = Number.isFinite(ipnFeeUser) && ipnFeeUser >= 0 ? ipnFeeUser : ipnFeeBase;
       const wdFee = Number.isFinite(wdFeeUser) && wdFeeUser >= 0 ? wdFeeUser : wdFeeBase;
       lines.push(
-        `${u.id} | ${u.isActive ? 'Active' : 'Inactive'} | Dư: ${Number(u.balance || 0).toLocaleString()}đ | VA: ${u.createdVA}/${u.vaLimit !== null ? u.vaLimit : '∞'}`
+        `${unameStr} | ${u.id} | ${u.isActive ? 'Active' : 'Inactive'} | Dư: ${Number(u.balance || 0).toLocaleString()}đ | VA: ${u.createdVA}/${u.vaLimit !== null ? u.vaLimit : '∞'}`
       );
       lines.push(`%: ${feePercent}% | IPN: ${ipnFee.toLocaleString()}đ | WD: ${wdFee.toLocaleString()}đ`);
       lines.push('');
@@ -1834,13 +1851,15 @@ const ibftState = new Map();
     lines.push(`👥 Danh sách User (${p}/${pageCount})`);
     lines.push('');
     for (const u of slice) {
+      const uname = String(u.username || '').trim();
+      const unameStr = uname ? `@${uname}` : '-';
       const feePercent = u.feePercent !== null ? u.feePercent : config.globalFeePercent;
       const ipnFeeUser = u.ipnFeeFlat !== null && u.ipnFeeFlat !== undefined ? Number(u.ipnFeeFlat) : NaN;
       const wdFeeUser = u.withdrawFeeFlat !== null && u.withdrawFeeFlat !== undefined ? Number(u.withdrawFeeFlat) : NaN;
       const ipnFee = Number.isFinite(ipnFeeUser) && ipnFeeUser >= 0 ? ipnFeeUser : ipnFeeBase;
       const wdFee = Number.isFinite(wdFeeUser) && wdFeeUser >= 0 ? wdFeeUser : wdFeeBase;
       lines.push(
-        `${u.id} | ${u.isActive ? 'Active' : 'Inactive'} | Dư: ${Number(u.balance || 0).toLocaleString()}đ | VA: ${u.createdVA}/${u.vaLimit !== null ? u.vaLimit : '∞'}`
+        `${unameStr} | ${u.id} | ${u.isActive ? 'Active' : 'Inactive'} | Dư: ${Number(u.balance || 0).toLocaleString()}đ | VA: ${u.createdVA}/${u.vaLimit !== null ? u.vaLimit : '∞'}`
       );
       lines.push(`%: ${feePercent}% | IPN: ${ipnFee.toLocaleString()}đ | WD: ${wdFee.toLocaleString()}đ`);
       lines.push('');
@@ -1882,6 +1901,7 @@ const ibftState = new Map();
       const users = db.getAllUsers().slice().sort((a, b) => String(a.id).localeCompare(String(b.id)));
       const headers = [
         'id',
+        'username',
         'isActive',
         'balance',
         'createdVA',
@@ -1902,6 +1922,7 @@ const ibftState = new Map();
         const feePercent = Number.isFinite(feePercentUser) ? feePercentUser : feePercentBase;
         return [
           String(u.id),
+          String(u.username || ''),
           u.isActive ? '1' : '0',
           String(Number(u.balance || 0)),
           String(Number(u.createdVA || 0)),
@@ -1937,6 +1958,7 @@ const ibftState = new Map();
       const users = db.getAllUsers().slice().sort((a, b) => String(a.id).localeCompare(String(b.id)));
       const headers = [
         'id',
+        'username',
         'isActive',
         'balance',
         'createdVA',
@@ -1957,6 +1979,7 @@ const ibftState = new Map();
         const feePercent = Number.isFinite(feePercentUser) ? feePercentUser : feePercentBase;
         return [
           String(u.id),
+          String(u.username || ''),
           u.isActive ? '1' : '0',
           String(Number(u.balance || 0)),
           String(Number(u.createdVA || 0)),

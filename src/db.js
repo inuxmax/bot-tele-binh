@@ -221,6 +221,7 @@ function getUser(id) {
   if (!users[key]) {
     users[key] = {
       id: key,
+      username: '',
       isActive: false,
       feePercent: null,
       ipnFeeFlat: null,
@@ -246,6 +247,7 @@ function updateUser(id, data) {
   if (!users[key]) {
     users[key] = {
       id: key,
+      username: '',
       isActive: false,
       feePercent: null,
       ipnFeeFlat: null,
