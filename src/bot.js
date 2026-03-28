@@ -412,7 +412,19 @@ if (!bot) {
 
   (async () => {
     try {
-      await bot.telegram.setMyCommands(USER_BOT_COMMANDS);
+      await bot.telegram.setMyCommands(USER_BOT_COMMANDS, { scope: { type: 'default' } });
+      await bot.telegram.setMyCommands(USER_BOT_COMMANDS, { scope: { type: 'all_private_chats' } });
+      try {
+        const adminIds = String(process.env.ADMIN_IDS || '')
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean);
+        for (const id of adminIds) {
+          const chatId = Number(id);
+          if (!Number.isFinite(chatId)) continue;
+          await bot.telegram.setMyCommands(ADMIN_BOT_COMMANDS, { scope: { type: 'chat', chat_id: chatId } });
+        }
+      } catch (_) {}
     } catch (_) {}
   })();
 
