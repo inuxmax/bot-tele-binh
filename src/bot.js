@@ -1,5 +1,7 @@
 require('dotenv').config();
 const { Telegraf, Markup } = require('telegraf');
+const fs = require('fs');
+const path = require('path');
 const crypto = require('crypto');
 const axios = require('axios');
 const express = require('express');
@@ -15,6 +17,9 @@ const requestStatus = new Map();
 const awaitingStatus = new Map();
 const withdrawState = new Map();
 const smallTxTracker = new Map();
+const vaListState = new Map();
+const usersListState = new Map();
+const ibftHistState = new Map();
 
 function isAdminId(id) {
   const raw = process.env.ADMIN_IDS || '';
@@ -481,7 +486,7 @@ function menuKeyboard(ctx) {
       ['🎲 Random tên', '✍️ Nhập tên'],
       ['🔎 Kiểm tra tài khoản', '💸 Rút tiền', '🗂 VA đã tạo'],
       ['ℹ️ Thông tin', '📋 DS rút', '🔄 Cập nhật rút'],
-      ['⚙️ Quản lý', '💰 Số dư'],
+      ['⚙️ Quản lý', '💰 Số dư', '📜 Lịch sử chi hộ'],
       ['🏧 Chi hộ']
     ]).resize();
   }
@@ -493,7 +498,7 @@ function menuKeyboard(ctx) {
 }
 
 function isMenuText(t) {
-  return t === '🎲 Random tên' || t === '✍️ Nhập tên' || t === '💰 Số dư' || t === '🔎 Kiểm tra tài khoản' || t === '💸 Rút tiền' || t === '📋 DS rút' || t === '🔄 Cập nhật rút' || t === '⚙️ Quản lý' || t === '🗂 VA đã tạo' || t === 'ℹ️ Thông tin' || t === 'Đã rút' || t === 'Chưa rút' || t === 'Từ chối' || t === 'Rút ALL' || t === '✅ Xác nhận tạo' || t === '✅ Xác nhận chi hộ' || t === '❌ Hủy' || t === '/menu' || t === '/start' || t === '🏧 Chi hộ' || t === '🏦 MSB' || t === '🏦 KLB' || t === '🏦 BIDV (BẢO TRÌ)';
+  return t === '🎲 Random tên' || t === '✍️ Nhập tên' || t === '💰 Số dư' || t === '📜 Lịch sử chi hộ' || t === '🔎 Kiểm tra tài khoản' || t === '💸 Rút tiền' || t === '📋 DS rút' || t === '🔄 Cập nhật rút' || t === '⚙️ Quản lý' || t === '🗂 VA đã tạo' || t === 'ℹ️ Thông tin' || t === 'Đã rút' || t === 'Chưa rút' || t === 'Từ chối' || t === 'Rút ALL' || t === '✅ Xác nhận tạo' || t === '✅ Xác nhận chi hộ' || t === '❌ Hủy' || t === '/menu' || t === '/start' || t === '🏧 Chi hộ' || t === '🏦 MSB' || t === '🏦 KLB' || t === '🏦 BIDV (BẢO TRÌ)';
 }
 
 const app = express();
@@ -922,7 +927,7 @@ if (!bot) {
   const MAIN_MENU_CMDS = [
     '🎲 Random tên', '✍️ Nhập tên', '💰 Số dư', '🔎 Kiểm tra tài khoản', 
     '💸 Rút tiền', '📋 DS rút', '🔄 Cập nhật rút', '⚙️ Quản lý', '🗂 VA đã tạo', 
-    'ℹ️ Thông tin', '🏧 Chi hộ', '/menu', '/start'
+    'ℹ️ Thông tin', '🏧 Chi hộ', '📜 Lịch sử chi hộ', '/menu', '/start'
   ];
 
   bot.use(async (ctx, next) => {
@@ -1391,6 +1396,22 @@ const ibftState = new Map();
       const rawErrCode = raw ? String(raw.errorCode || raw.error_code || '') : '';
       const rawErrMsg = raw ? String(raw.errorMessage || raw.error_message || raw.message || '') : '';
       const isOk = rawErrCode === '' || rawErrCode === '00' || String(decoded?.tranStatus || '').toLowerCase() === 'success';
+      try {
+        db.addIbftHistory({
+          ts: Date.now(),
+          adminId: ctx.from.id,
+          merchant: cfg.merchantLabel,
+          bankCode,
+          accountNumber,
+          accountName,
+          amount,
+          remark,
+          orderId: decoded?.orderId || '',
+          tranStatus: decoded?.tranStatus || '',
+          errorCode: isOk ? '' : rawErrCode,
+          errorMessage: isOk ? '' : rawErrMsg,
+        });
+      } catch (_) {}
       if (!isOk) {
         lines.push('Kết quả: Sai thông tin tài khoản hoặc ngân hàng không hợp lệ.');
         if (rawErrCode) lines.push(`Mã lỗi: ${rawErrCode}`);
@@ -1400,10 +1421,27 @@ const ibftState = new Map();
       }
       await ctx.reply(lines.join('\n') || 'Đã tạo yêu cầu chi hộ.', menuKeyboard(ctx));
     } catch (e) {
+      const stNow = ibftState.get(ctx.from.id) || {};
       ibftState.delete(ctx.from.id);
       const data = e.response?.data || {};
       const code = String(data.errorCode || data.error_code || '');
       const msg = String(data.errorMessage || data.error_message || data.message || e.message || '');
+      try {
+        db.addIbftHistory({
+          ts: Date.now(),
+          adminId: ctx.from.id,
+          merchant: String(stNow.merchant || ''),
+          bankCode: String(stNow.bankCode || ''),
+          accountNumber: String(stNow.accountNumber || ''),
+          accountName: String(stNow.accountName || ''),
+          amount: Number(stNow.amount) || 0,
+          remark: String(stNow.remark || ''),
+          orderId: '',
+          tranStatus: '',
+          errorCode: code,
+          errorMessage: msg,
+        });
+      } catch (_) {}
       if (code || msg) {
         await ctx.reply(`Sai thông tin tài khoản hoặc ngân hàng không hợp lệ.\n${code ? `Mã lỗi: ${code}\n` : ''}${msg ? `Thông tin: ${msg}` : ''}`.trim(), menuKeyboard(ctx));
       } else {
@@ -1427,17 +1465,21 @@ const ibftState = new Map();
   });
 
   bot.hears('ℹ️ Thông tin', async (ctx) => {
-    const computed = computeUserBalanceFromRecords(ctx.from.id);
-    db.updateUser(ctx.from.id, { balance: computed.balance });
     const user = db.getUser(ctx.from.id);
     const config = db.getConfig();
-    const feeFlat = Math.max(0, Number(config.withdrawFeeFlat ?? config.ipnFeeFlat ?? 0) || 0);
+    const ipnFeeFlatBase = Math.max(0, Number(config.ipnFeeFlat ?? 0) || 0);
+    const wdFeeFlatBase = Math.max(0, Number(config.withdrawFeeFlat ?? 0) || 0);
+    const ipnFeeUser = user.ipnFeeFlat !== null && user.ipnFeeFlat !== undefined ? Number(user.ipnFeeFlat) : NaN;
+    const wdFeeUser = user.withdrawFeeFlat !== null && user.withdrawFeeFlat !== undefined ? Number(user.withdrawFeeFlat) : NaN;
+    const ipnFeeFlat = Number.isFinite(ipnFeeUser) && ipnFeeUser >= 0 ? ipnFeeUser : ipnFeeFlatBase;
+    const wdFeeFlat = Number.isFinite(wdFeeUser) && wdFeeUser >= 0 ? wdFeeUser : wdFeeFlatBase;
     const feePercent = user.feePercent !== null ? user.feePercent : config.globalFeePercent;
     
     const msg = `ℹ️ THÔNG TIN TÀI KHOẢN\n\n` +
       `👤 ID: \`${user.id}\`\n` +
       `💰 Tổng số dư: ${user.balance.toLocaleString()}đ\n` +
-      `💸 Phí chuyển: ${feeFlat.toLocaleString()}đ\n` +
+      `💸 Phí chuyển: ${wdFeeFlat.toLocaleString()}đ\n` +
+      `🧾 Phí giao dịch: ${ipnFeeFlat.toLocaleString()}đ\n` +
       `📉 Phí rút: ${feePercent}%\n` +
       `📊 Tổng số VA đã tạo: ${user.createdVA}\n` +
       `🚫 Giới hạn tạo VA: ${user.vaLimit !== null ? user.vaLimit : 'Không giới hạn'}`;
@@ -1446,15 +1488,91 @@ const ibftState = new Map();
   });
 
   bot.hears('🗂 VA đã tạo', async (ctx) => {
-    const vas = db.getVAsByUser(ctx.from.id, 10);
-    if (vas.length === 0) return ctx.reply('Bạn chưa tạo VA nào.', menuKeyboard(ctx));
-    const lines = vas.map(v => {
-      // Nếu VA đã được thanh toán (status = paid), hiển thị số tiền đã chuyển (amount)
-      // Nếu chưa thanh toán (unpaid), hiển thị số tiền cần thu (vaAmount), nếu linh hoạt thì là 0
-      const amt = v.status === 'paid' ? (v.amount || '0') : (v.vaAmount || '0');
-      return `- ID: ${v.requestId} | STK: ${v.vaAccount || 'N/A'} | BANK: ${v.vaBank || 'N/A'} | TÊN: ${v.name || v.customerName || 'N/A'} | SỐ TIỀN: ${amt} | TT: ${v.status}`;
-    }).join('\n');
-    await ctx.reply(`10 VA gần nhất của bạn:\n${lines}`, menuKeyboard(ctx));
+    const all = db.getVAsByUser(ctx.from.id, 1000);
+    if (all.length === 0) return ctx.reply('Bạn chưa tạo VA nào.', menuKeyboard(ctx));
+    const pageSize = 8;
+    const pageCount = Math.max(1, Math.ceil(all.length / pageSize));
+    const page = 0;
+    vaListState.set(ctx.from.id, { page });
+    const slice = all.slice(page * pageSize, page * pageSize + pageSize);
+    const lines = [];
+    lines.push(`🗂 VA đã tạo (${page + 1}/${pageCount})`);
+    lines.push('');
+    for (const v of slice) {
+      const statusRaw = String(v.status || '').trim().toLowerCase();
+      const statusLabel = statusRaw === 'paid' ? '✅ paid' : statusRaw === 'unpaid' ? '⏳ unpaid' : statusRaw || 'N/A';
+      const amt = statusRaw === 'paid' ? (v.netAmount || v.amount || '0') : (v.vaAmount || '0');
+      const amtNum = toAmountNumber(amt);
+      const amtStr = amtNum ? `${amtNum.toLocaleString()}đ` : String(amt || '0');
+      const name = String(v.name || v.customerName || 'N/A').trim();
+      const bank = String(v.vaBank || 'N/A').trim();
+      const acc = String(v.vaAccount || 'N/A').trim();
+      const rid = String(v.requestId || '').trim();
+      lines.push(`• ${statusLabel} | ${amtStr}`);
+      lines.push(`  🏦 ${bank} | 💳 ${acc}`);
+      lines.push(`  👤 ${name}`);
+      if (rid) lines.push(`  🆔 ${rid}`);
+      lines.push('');
+    }
+    const nav = [];
+    if (page > 0) nav.push(Markup.button.callback('⬅️ Trước', `va_list:${page - 1}`));
+    if (page < pageCount - 1) nav.push(Markup.button.callback('Sau ➡️', `va_list:${page + 1}`));
+    const kbRows = [];
+    if (nav.length) kbRows.push(nav);
+    kbRows.push([Markup.button.callback('❌ Đóng', 'va_list_close')]);
+    await ctx.replyWithMarkdown(lines.join('\n').trim(), { reply_markup: Markup.inlineKeyboard(kbRows).reply_markup });
+  });
+
+  bot.action(/^va_list:(\d+)$/, async (ctx) => {
+    try {
+      await ctx.answerCbQuery();
+    } catch (_) {}
+    const st = vaListState.get(ctx.from.id);
+    if (!st) return;
+    const all = db.getVAsByUser(ctx.from.id, 1000);
+    const pageSize = 8;
+    const pageCount = Math.max(1, Math.ceil(all.length / pageSize));
+    const page = Math.max(0, Math.min(Number(ctx.match[1] || 0), pageCount - 1));
+    vaListState.set(ctx.from.id, { page });
+    const slice = all.slice(page * pageSize, page * pageSize + pageSize);
+    const lines = [];
+    lines.push(`🗂 VA đã tạo (${page + 1}/${pageCount})`);
+    lines.push('');
+    for (const v of slice) {
+      const statusRaw = String(v.status || '').trim().toLowerCase();
+      const statusLabel = statusRaw === 'paid' ? '✅ paid' : statusRaw === 'unpaid' ? '⏳ unpaid' : statusRaw || 'N/A';
+      const amt = statusRaw === 'paid' ? (v.netAmount || v.amount || '0') : (v.vaAmount || '0');
+      const amtNum = toAmountNumber(amt);
+      const amtStr = amtNum ? `${amtNum.toLocaleString()}đ` : String(amt || '0');
+      const name = String(v.name || v.customerName || 'N/A').trim();
+      const bank = String(v.vaBank || 'N/A').trim();
+      const acc = String(v.vaAccount || 'N/A').trim();
+      const rid = String(v.requestId || '').trim();
+      lines.push(`• ${statusLabel} | ${amtStr}`);
+      lines.push(`  🏦 ${bank} | 💳 ${acc}`);
+      lines.push(`  👤 ${name}`);
+      if (rid) lines.push(`  🆔 ${rid}`);
+      lines.push('');
+    }
+    const nav = [];
+    if (page > 0) nav.push(Markup.button.callback('⬅️ Trước', `va_list:${page - 1}`));
+    if (page < pageCount - 1) nav.push(Markup.button.callback('Sau ➡️', `va_list:${page + 1}`));
+    const kbRows = [];
+    if (nav.length) kbRows.push(nav);
+    kbRows.push([Markup.button.callback('❌ Đóng', 'va_list_close')]);
+    try {
+      await ctx.editMessageText(lines.join('\n').trim(), { parse_mode: 'Markdown', reply_markup: Markup.inlineKeyboard(kbRows).reply_markup });
+    } catch (_) {}
+  });
+
+  bot.action('va_list_close', async (ctx) => {
+    try {
+      await ctx.answerCbQuery();
+    } catch (_) {}
+    vaListState.delete(ctx.from.id);
+    try {
+      await ctx.editMessageReplyMarkup(undefined);
+    } catch (_) {}
   });
 
   bot.hears('⚙️ Quản lý', async (ctx) => {
@@ -1469,11 +1587,14 @@ const ibftState = new Map();
       `/setwdfeeall <số> : Set phí chuyển rút tiền (VNĐ) cho tất cả\n` +
       `/setipnfeeuser <id> <số> : Set phí giao dịch tiền về (VNĐ) theo user\n` +
       `/setwdfeeuser <id> <số> : Set phí chuyển rút tiền (VNĐ) theo user\n` +
+      `/ibfthist [n] : Lịch sử chi hộ\n` +
+      `/ibftexport ... : Xuất excel chi hộ\n` +
       `/balhist [n] : Xem lịch sử số dư admin\n` +
       `/user <id> : Xem thông tin user\n` +
       `/uhist <id> [n] : Xem lịch sử số dư user\n` +
       `/setlimit <id> <số> : Set giới hạn VA cho user\n` +
       `/users : Xem danh sách user\n` +
+      `/usersexport : Xuất excel user\n` +
       `/admins : Xem danh sách admin`;
     await ctx.reply(msg, menuKeyboard(ctx));
   });
@@ -1581,10 +1702,249 @@ const ibftState = new Map();
 
   bot.command('users', async (ctx) => {
     if (!isAdminId(ctx.from.id)) return;
-    const users = db.getAllUsers();
+    const parts = String(ctx.message?.text || '').trim().split(/\s+/);
+    const arg = String(parts[1] || '').trim();
+    if (arg) {
+      const numeric = arg.replace(/[^\d]/g, '');
+      if (numeric.length >= 8) {
+        const u = db.findUser(numeric);
+        if (!u) {
+          await ctx.reply('Không tìm thấy user này.', menuKeyboard(ctx));
+          return;
+        }
+        const config = db.getConfig();
+        const ipnFeeBase = Math.max(0, Number(config.ipnFeeFlat ?? 0) || 0);
+        const wdFeeBase = Math.max(0, Number(config.withdrawFeeFlat ?? config.ipnFeeFlat ?? 0) || 0);
+        const feePercentBase = Number(config.globalFeePercent || 0);
+        const ipnFeeUser = u.ipnFeeFlat !== null && u.ipnFeeFlat !== undefined ? Number(u.ipnFeeFlat) : NaN;
+        const wdFeeUser = u.withdrawFeeFlat !== null && u.withdrawFeeFlat !== undefined ? Number(u.withdrawFeeFlat) : NaN;
+        const feePercentUser = u.feePercent !== null && u.feePercent !== undefined ? Number(u.feePercent) : NaN;
+        const ipnFee = Number.isFinite(ipnFeeUser) && ipnFeeUser >= 0 ? ipnFeeUser : ipnFeeBase;
+        const wdFee = Number.isFinite(wdFeeUser) && wdFeeUser >= 0 ? wdFeeUser : wdFeeBase;
+        const feePercent = Number.isFinite(feePercentUser) ? feePercentUser : feePercentBase;
+        const lines = [];
+        lines.push('👤 *THÔNG TIN USER*');
+        lines.push('');
+        lines.push(`🆔 ID: \`${u.id}\``);
+        lines.push(`📌 Trạng thái: *${u.isActive ? 'ACTIVE' : 'INACTIVE'}*`);
+        lines.push(`💰 Số dư: *${Number(u.balance || 0).toLocaleString()}đ*`);
+        lines.push('');
+        lines.push(`🧾 Phí giao dịch (IPN): *${ipnFee.toLocaleString()}đ*${Number.isFinite(ipnFeeUser) ? ' (user)' : ''}`);
+        lines.push(`💸 Phí chuyển (rút): *${wdFee.toLocaleString()}đ*${Number.isFinite(wdFeeUser) ? ' (user)' : ''}`);
+        lines.push(`📉 Phí rút (%): *${feePercent}%*${Number.isFinite(feePercentUser) ? ' (user)' : ''}`);
+        lines.push('');
+        lines.push(`📊 VA: ${u.createdVA}/${u.vaLimit !== null ? u.vaLimit : '∞'}`);
+        await ctx.replyWithMarkdown(lines.join('\n'), menuKeyboard(ctx));
+        return;
+      }
+    }
+
+    const page = Math.max(1, Number(arg || 1) || 1);
+    const config = db.getConfig();
+    const users = db.getAllUsers().slice().sort((a, b) => String(a.id).localeCompare(String(b.id)));
     if (users.length === 0) return ctx.reply('Chưa có user nào.');
-    const lines = users.map(u => `${u.id} | ${u.isActive?'Active':'Inactive'} | Dư: ${u.balance.toLocaleString()}đ | VA: ${u.createdVA}/${u.vaLimit!==null?u.vaLimit:'∞'} | Phí: ${u.feePercent!==null?u.feePercent+'%':'chung'}`).join('\n');
-    await ctx.reply(`Danh sách User:\n${lines}`);
+    const pageSize = 10;
+    const pageCount = Math.max(1, Math.ceil(users.length / pageSize));
+    const p = Math.max(1, Math.min(page, pageCount));
+    usersListState.set(ctx.from.id, { page: p });
+
+    const ipnFeeBase = Math.max(0, Number(config.ipnFeeFlat ?? 0) || 0);
+    const wdFeeBase = Math.max(0, Number(config.withdrawFeeFlat ?? config.ipnFeeFlat ?? 0) || 0);
+
+    const slice = users.slice((p - 1) * pageSize, (p - 1) * pageSize + pageSize);
+    const lines = [];
+    lines.push(`👥 Danh sách User (${p}/${pageCount})`);
+    lines.push('');
+    for (const u of slice) {
+      const feePercent = u.feePercent !== null ? u.feePercent : config.globalFeePercent;
+      const ipnFeeUser = u.ipnFeeFlat !== null && u.ipnFeeFlat !== undefined ? Number(u.ipnFeeFlat) : NaN;
+      const wdFeeUser = u.withdrawFeeFlat !== null && u.withdrawFeeFlat !== undefined ? Number(u.withdrawFeeFlat) : NaN;
+      const ipnFee = Number.isFinite(ipnFeeUser) && ipnFeeUser >= 0 ? ipnFeeUser : ipnFeeBase;
+      const wdFee = Number.isFinite(wdFeeUser) && wdFeeUser >= 0 ? wdFeeUser : wdFeeBase;
+      lines.push(
+        `${u.id} | ${u.isActive ? 'Active' : 'Inactive'} | Dư: ${Number(u.balance || 0).toLocaleString()}đ | VA: ${u.createdVA}/${u.vaLimit !== null ? u.vaLimit : '∞'}`
+      );
+      lines.push(`%: ${feePercent}% | IPN: ${ipnFee.toLocaleString()}đ | WD: ${wdFee.toLocaleString()}đ`);
+      lines.push('');
+    }
+
+    const nav = [];
+    if (p > 1) nav.push(Markup.button.callback('⬅️ Trước', `users_list:${p - 1}`));
+    if (p < pageCount) nav.push(Markup.button.callback('Sau ➡️', `users_list:${p + 1}`));
+    const rows = [];
+    if (nav.length) rows.push(nav);
+    rows.push([Markup.button.callback('📤 Xuất Excel', 'users_export')]);
+    rows.push([Markup.button.callback('❌ Đóng', 'users_list_close')]);
+    await ctx.reply(lines.join('\n').trim(), { reply_markup: Markup.inlineKeyboard(rows).reply_markup });
+  });
+
+  bot.action(/^users_list:(\d+)$/, async (ctx) => {
+    try {
+      await ctx.answerCbQuery();
+    } catch (_) {}
+    if (!isAdminId(ctx.from.id)) return;
+    const config = db.getConfig();
+    const users = db.getAllUsers().slice().sort((a, b) => String(a.id).localeCompare(String(b.id)));
+    if (!users.length) return;
+    const pageSize = 10;
+    const pageCount = Math.max(1, Math.ceil(users.length / pageSize));
+    const p = Math.max(1, Math.min(Number(ctx.match[1] || 1), pageCount));
+    usersListState.set(ctx.from.id, { page: p });
+
+    const ipnFeeBase = Math.max(0, Number(config.ipnFeeFlat ?? 0) || 0);
+    const wdFeeBase = Math.max(0, Number(config.withdrawFeeFlat ?? config.ipnFeeFlat ?? 0) || 0);
+
+    const slice = users.slice((p - 1) * pageSize, (p - 1) * pageSize + pageSize);
+    const lines = [];
+    lines.push(`👥 Danh sách User (${p}/${pageCount})`);
+    lines.push('');
+    for (const u of slice) {
+      const feePercent = u.feePercent !== null ? u.feePercent : config.globalFeePercent;
+      const ipnFeeUser = u.ipnFeeFlat !== null && u.ipnFeeFlat !== undefined ? Number(u.ipnFeeFlat) : NaN;
+      const wdFeeUser = u.withdrawFeeFlat !== null && u.withdrawFeeFlat !== undefined ? Number(u.withdrawFeeFlat) : NaN;
+      const ipnFee = Number.isFinite(ipnFeeUser) && ipnFeeUser >= 0 ? ipnFeeUser : ipnFeeBase;
+      const wdFee = Number.isFinite(wdFeeUser) && wdFeeUser >= 0 ? wdFeeUser : wdFeeBase;
+      lines.push(
+        `${u.id} | ${u.isActive ? 'Active' : 'Inactive'} | Dư: ${Number(u.balance || 0).toLocaleString()}đ | VA: ${u.createdVA}/${u.vaLimit !== null ? u.vaLimit : '∞'}`
+      );
+      lines.push(`%: ${feePercent}% | IPN: ${ipnFee.toLocaleString()}đ | WD: ${wdFee.toLocaleString()}đ`);
+      lines.push('');
+    }
+
+    const nav = [];
+    if (p > 1) nav.push(Markup.button.callback('⬅️ Trước', `users_list:${p - 1}`));
+    if (p < pageCount) nav.push(Markup.button.callback('Sau ➡️', `users_list:${p + 1}`));
+    const rows = [];
+    if (nav.length) rows.push(nav);
+    rows.push([Markup.button.callback('📤 Xuất Excel', 'users_export')]);
+    rows.push([Markup.button.callback('❌ Đóng', 'users_list_close')]);
+    try {
+      await ctx.editMessageText(lines.join('\n').trim(), { reply_markup: Markup.inlineKeyboard(rows).reply_markup });
+    } catch (_) {}
+  });
+
+  bot.action('users_list_close', async (ctx) => {
+    try {
+      await ctx.answerCbQuery();
+    } catch (_) {}
+    usersListState.delete(ctx.from.id);
+    try {
+      await ctx.editMessageReplyMarkup(undefined);
+    } catch (_) {}
+  });
+
+  bot.action('users_export', async (ctx) => {
+    try {
+      await ctx.answerCbQuery();
+    } catch (_) {}
+    if (!isAdminId(ctx.from.id)) return;
+    try {
+      const config = db.getConfig();
+      const ipnFeeBase = Math.max(0, Number(config.ipnFeeFlat ?? 0) || 0);
+      const wdFeeBase = Math.max(0, Number(config.withdrawFeeFlat ?? config.ipnFeeFlat ?? 0) || 0);
+      const feePercentBase = Number(config.globalFeePercent || 0);
+
+      const users = db.getAllUsers().slice().sort((a, b) => String(a.id).localeCompare(String(b.id)));
+      const headers = [
+        'id',
+        'isActive',
+        'balance',
+        'createdVA',
+        'vaLimit',
+        'feePercent_effective',
+        'feePercent_user',
+        'ipnFee_effective',
+        'ipnFee_user',
+        'withdrawFee_effective',
+        'withdrawFee_user',
+      ];
+      const rows = users.map((u) => {
+        const ipnFeeUser = u.ipnFeeFlat !== null && u.ipnFeeFlat !== undefined ? Number(u.ipnFeeFlat) : NaN;
+        const wdFeeUser = u.withdrawFeeFlat !== null && u.withdrawFeeFlat !== undefined ? Number(u.withdrawFeeFlat) : NaN;
+        const feePercentUser = u.feePercent !== null && u.feePercent !== undefined ? Number(u.feePercent) : NaN;
+        const ipnFee = Number.isFinite(ipnFeeUser) && ipnFeeUser >= 0 ? ipnFeeUser : ipnFeeBase;
+        const wdFee = Number.isFinite(wdFeeUser) && wdFeeUser >= 0 ? wdFeeUser : wdFeeBase;
+        const feePercent = Number.isFinite(feePercentUser) ? feePercentUser : feePercentBase;
+        return [
+          String(u.id),
+          u.isActive ? '1' : '0',
+          String(Number(u.balance || 0)),
+          String(Number(u.createdVA || 0)),
+          u.vaLimit === null || u.vaLimit === undefined ? '' : String(u.vaLimit),
+          String(feePercent),
+          Number.isFinite(feePercentUser) ? String(feePercentUser) : '',
+          String(ipnFee),
+          Number.isFinite(ipnFeeUser) ? String(ipnFeeUser) : '',
+          String(wdFee),
+          Number.isFinite(wdFeeUser) ? String(wdFeeUser) : '',
+        ];
+      });
+      const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+      const filename = `users_${stamp}.csv`;
+      const filePath = writeCsvFile(filename, headers, rows);
+      await bot.telegram.sendDocument(ctx.chat.id, { source: fs.createReadStream(filePath), filename }, { caption: `Xuất user: ${users.length} dòng` });
+      try {
+        fs.unlinkSync(filePath);
+      } catch (_) {}
+    } catch (e) {
+      await ctx.reply(`Lỗi xuất excel user: ${e.message}`, menuKeyboard(ctx));
+    }
+  });
+
+  bot.command('usersexport', async (ctx) => {
+    if (!isAdminId(ctx.from.id)) return;
+    try {
+      const config = db.getConfig();
+      const ipnFeeBase = Math.max(0, Number(config.ipnFeeFlat ?? 0) || 0);
+      const wdFeeBase = Math.max(0, Number(config.withdrawFeeFlat ?? config.ipnFeeFlat ?? 0) || 0);
+      const feePercentBase = Number(config.globalFeePercent || 0);
+
+      const users = db.getAllUsers().slice().sort((a, b) => String(a.id).localeCompare(String(b.id)));
+      const headers = [
+        'id',
+        'isActive',
+        'balance',
+        'createdVA',
+        'vaLimit',
+        'feePercent_effective',
+        'feePercent_user',
+        'ipnFee_effective',
+        'ipnFee_user',
+        'withdrawFee_effective',
+        'withdrawFee_user',
+      ];
+      const rows = users.map((u) => {
+        const ipnFeeUser = u.ipnFeeFlat !== null && u.ipnFeeFlat !== undefined ? Number(u.ipnFeeFlat) : NaN;
+        const wdFeeUser = u.withdrawFeeFlat !== null && u.withdrawFeeFlat !== undefined ? Number(u.withdrawFeeFlat) : NaN;
+        const feePercentUser = u.feePercent !== null && u.feePercent !== undefined ? Number(u.feePercent) : NaN;
+        const ipnFee = Number.isFinite(ipnFeeUser) && ipnFeeUser >= 0 ? ipnFeeUser : ipnFeeBase;
+        const wdFee = Number.isFinite(wdFeeUser) && wdFeeUser >= 0 ? wdFeeUser : wdFeeBase;
+        const feePercent = Number.isFinite(feePercentUser) ? feePercentUser : feePercentBase;
+        return [
+          String(u.id),
+          u.isActive ? '1' : '0',
+          String(Number(u.balance || 0)),
+          String(Number(u.createdVA || 0)),
+          u.vaLimit === null || u.vaLimit === undefined ? '' : String(u.vaLimit),
+          String(feePercent),
+          Number.isFinite(feePercentUser) ? String(feePercentUser) : '',
+          String(ipnFee),
+          Number.isFinite(ipnFeeUser) ? String(ipnFeeUser) : '',
+          String(wdFee),
+          Number.isFinite(wdFeeUser) ? String(wdFeeUser) : '',
+        ];
+      });
+      const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+      const filename = `users_${stamp}.csv`;
+      const filePath = writeCsvFile(filename, headers, rows);
+      await ctx.reply('Đang tạo file...', menuKeyboard(ctx));
+      await bot.telegram.sendDocument(ctx.chat.id, { source: fs.createReadStream(filePath), filename }, { caption: `Xuất user: ${users.length} dòng` });
+      try {
+        fs.unlinkSync(filePath);
+      } catch (_) {}
+    } catch (e) {
+      await ctx.reply(`Lỗi xuất excel user: ${e.message}`, menuKeyboard(ctx));
+    }
   });
 
   bot.command('admins', async (ctx) => {
@@ -1618,6 +1978,392 @@ const ibftState = new Map();
       return `${ts} | ${bal.toLocaleString()}đ`;
     });
     await ctx.reply(`Lịch sử số dư (mới nhất):\n${lines.join('\n')}`, menuKeyboard(ctx));
+  });
+
+  function maskAccountNumber(s) {
+    const acc = String(s || '').trim();
+    if (acc.length <= 6) return acc;
+    return `${acc.slice(0, 3)}xxxx${acc.slice(-3)}`;
+  }
+
+  function normalizeKeyText(s) {
+    return String(s || '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase();
+  }
+
+  function classifyIbft(it) {
+    const ok = !it.errorCode && !it.errorMessage;
+    if (ok) return 'success';
+    const t = normalizeKeyText(`${it.errorMessage || ''} ${it.errorCode || ''}`);
+    if (t.includes('ten') || t.includes('name') || t.includes('account name') || t.includes('chu tk') || t.includes('chu tai khoan')) return 'name_error';
+    if (t.includes('stk') || t.includes('so tai khoan') || t.includes('account') || t.includes('account number')) return 'account_error';
+    return 'other_error';
+  }
+
+  function rangeToTs(rangeKey) {
+    const now = new Date();
+    const vn = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Ho_Chi_Minh' }));
+    const end = Date.now();
+    const startOfDay = new Date(vn.getFullYear(), vn.getMonth(), vn.getDate()).getTime();
+    if (rangeKey === 'today') return { fromTs: startOfDay, toTs: end };
+    if (rangeKey === '7d') return { fromTs: startOfDay - 6 * 24 * 60 * 60 * 1000, toTs: end };
+    return { fromTs: 0, toTs: end };
+  }
+
+  function filterIbft(items, typeKey, rangeKey) {
+    const { fromTs, toTs } = rangeToTs(rangeKey);
+    const type = String(typeKey || 'all');
+    return items.filter((it) => {
+      const ts = Number(it.ts) || 0;
+      if (fromTs && ts < fromTs) return false;
+      if (toTs && ts > toTs) return false;
+      if (type === 'all') return true;
+      return classifyIbft(it) === type;
+    });
+  }
+
+  function fmtIbftItem(it) {
+    const ts = formatDateTimeVN(it.ts);
+    const cls = classifyIbft(it);
+    const icon = cls === 'success' ? '✅' : cls === 'name_error' ? '❌👤' : cls === 'account_error' ? '❌💳' : '❌';
+    const amt = Number(it.amount) || 0;
+    const bank = escapeMd(String(it.bankCode || '').trim().toUpperCase());
+    const acc = escapeMd(maskAccountNumber(it.accountNumber));
+    const name = escapeMd(String(it.accountName || '').trim().toUpperCase());
+    const merchant = escapeMd(String(it.merchant || '').trim().toUpperCase());
+    const orderId = escapeMd(String(it.orderId || '').trim());
+    const status = escapeMd(String(it.tranStatus || '').trim());
+    const lines = [];
+    lines.push(`${icon} ${escapeMd(ts)} | ${amt.toLocaleString()}đ${merchant ? ` | ${merchant}` : ''}`);
+    lines.push(`🏦 ${bank} | 💳 ${acc}`);
+    if (name) lines.push(`👤 ${name}`);
+    if (orderId) lines.push(`🆔 ${orderId}`);
+    if (status) lines.push(`📌 ${status}`);
+    if (cls !== 'success') {
+      if (it.errorCode) lines.push(`⚠️ Mã lỗi: ${escapeMd(String(it.errorCode))}`);
+      if (it.errorMessage) lines.push(`⚠️ ${escapeMd(String(it.errorMessage))}`);
+    }
+    return lines.join('\n');
+  }
+
+  function formatIbftHistoryPage(allItems, typeKey, rangeKey, page) {
+    const filtered = filterIbft(allItems, typeKey, rangeKey);
+    const counts = { success: 0, name_error: 0, account_error: 0, other_error: 0 };
+    for (const it of filterIbft(allItems, 'all', rangeKey)) counts[classifyIbft(it)]++;
+    const pageSize = 10;
+    const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
+    const p = Math.max(1, Math.min(Number(page) || 1, pageCount));
+    const slice = filtered.slice((p - 1) * pageSize, (p - 1) * pageSize + pageSize);
+
+    const typeLabel =
+      typeKey === 'success'
+        ? '✅ Thành công'
+        : typeKey === 'name_error'
+          ? '❌ Lỗi tên'
+          : typeKey === 'account_error'
+            ? '❌ Lỗi STK'
+            : typeKey === 'other_error'
+              ? '❌ Lỗi khác'
+              : '📦 Tất cả';
+    const rangeLabel = rangeKey === 'today' ? 'Hôm nay' : rangeKey === '7d' ? '7 ngày' : 'All';
+
+    const out = [];
+    out.push(`📜 *LỊCH SỬ CHI HỘ* (${p}/${pageCount})`);
+    out.push(`📌 Loại: *${typeLabel}* | 📅 ${rangeLabel}`);
+    out.push(`✅ ${counts.success} | ❌👤 ${counts.name_error} | ❌💳 ${counts.account_error} | ❌ ${counts.other_error}`);
+    out.push('');
+    if (!slice.length) {
+      out.push('Không có dữ liệu.');
+      return { text: out.join('\n'), page: p, pageCount, total: filtered.length };
+    }
+    for (const it of slice) {
+      out.push(fmtIbftItem(it));
+      out.push('');
+    }
+    return { text: out.join('\n').trim(), page: p, pageCount, total: filtered.length };
+  }
+
+  function csvEscape(v) {
+    const s = String(v ?? '');
+    if (/[",\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+    return s;
+  }
+
+  function ensureExportDir() {
+    const dir = path.join(__dirname, '..', 'data', 'exports');
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    return dir;
+  }
+
+  function writeCsvFile(filename, headers, rows) {
+    const dir = ensureExportDir();
+    const filePath = path.join(dir, filename);
+    const lines = [];
+    lines.push(headers.map(csvEscape).join(','));
+    for (const r of rows) lines.push(r.map(csvEscape).join(','));
+    fs.writeFileSync(filePath, lines.join('\n'), 'utf8');
+    return filePath;
+  }
+
+  bot.hears('📜 Lịch sử chi hộ', async (ctx) => {
+    if (!isAdminId(ctx.from.id)) return;
+    const all = db.getAllIbftHistory();
+    if (!all.length) {
+      await ctx.reply('Chưa có lịch sử chi hộ.', menuKeyboard(ctx));
+      return;
+    }
+    const st = { type: 'all', range: 'all', page: 1 };
+    ibftHistState.set(ctx.from.id, st);
+    const pageData = formatIbftHistoryPage(all, st.type, st.range, st.page);
+    const nav = [];
+    if (pageData.page > 1) nav.push(Markup.button.callback('⬅️', `ibft_hist_page:${pageData.page - 1}`));
+    if (pageData.page < pageData.pageCount) nav.push(Markup.button.callback('➡️', `ibft_hist_page:${pageData.page + 1}`));
+    const rows = [
+      [
+        Markup.button.callback('✅ Thành công', 'ibft_hist_type:success'),
+        Markup.button.callback('❌ Lỗi tên', 'ibft_hist_type:name_error'),
+        Markup.button.callback('❌ Lỗi STK', 'ibft_hist_type:account_error'),
+      ],
+      [Markup.button.callback('❌ Lỗi khác', 'ibft_hist_type:other_error'), Markup.button.callback('📦 Tất cả', 'ibft_hist_type:all')],
+      [Markup.button.callback('📅 Hôm nay', 'ibft_hist_range:today'), Markup.button.callback('📅 7 ngày', 'ibft_hist_range:7d'), Markup.button.callback('📅 All', 'ibft_hist_range:all')],
+    ];
+    if (nav.length) rows.push(nav);
+    rows.push([Markup.button.callback('📤 Xuất Excel', 'ibft_export'), Markup.button.callback('📤 Xuất ALL', 'ibft_export_all')]);
+    rows.push([Markup.button.callback('❌ Đóng', 'ibft_hist_close')]);
+    await ctx.replyWithMarkdown(pageData.text, { reply_markup: Markup.inlineKeyboard(rows).reply_markup });
+  });
+
+  bot.command('ibfthist', async (ctx) => {
+    if (!isAdminId(ctx.from.id)) return;
+    const all = db.getAllIbftHistory();
+    if (!all.length) {
+      await ctx.reply('Chưa có lịch sử chi hộ.', menuKeyboard(ctx));
+      return;
+    }
+    const parts = String(ctx.message?.text || '').trim().split(/\s+/);
+    const page = Math.max(1, Number(parts[1] || 1) || 1);
+    const type = String(parts[2] || 'all').trim();
+    const range = String(parts[3] || 'all').trim();
+    const st = { type, range, page };
+    ibftHistState.set(ctx.from.id, st);
+    const pageData = formatIbftHistoryPage(all, st.type, st.range, st.page);
+    await ctx.replyWithMarkdown(pageData.text, menuKeyboard(ctx));
+  });
+
+  async function updateIbftHistMessage(ctx, nextState) {
+    const all = db.getAllIbftHistory();
+    const st = { type: nextState.type || 'all', range: nextState.range || 'all', page: Number(nextState.page) || 1 };
+    ibftHistState.set(ctx.from.id, st);
+    const pageData = formatIbftHistoryPage(all, st.type, st.range, st.page);
+    const nav = [];
+    if (pageData.page > 1) nav.push(Markup.button.callback('⬅️', `ibft_hist_page:${pageData.page - 1}`));
+    if (pageData.page < pageData.pageCount) nav.push(Markup.button.callback('➡️', `ibft_hist_page:${pageData.page + 1}`));
+    const rows = [
+      [
+        Markup.button.callback('✅ Thành công', 'ibft_hist_type:success'),
+        Markup.button.callback('❌ Lỗi tên', 'ibft_hist_type:name_error'),
+        Markup.button.callback('❌ Lỗi STK', 'ibft_hist_type:account_error'),
+      ],
+      [Markup.button.callback('❌ Lỗi khác', 'ibft_hist_type:other_error'), Markup.button.callback('📦 Tất cả', 'ibft_hist_type:all')],
+      [Markup.button.callback('📅 Hôm nay', 'ibft_hist_range:today'), Markup.button.callback('📅 7 ngày', 'ibft_hist_range:7d'), Markup.button.callback('📅 All', 'ibft_hist_range:all')],
+    ];
+    if (nav.length) rows.push(nav);
+    rows.push([Markup.button.callback('📤 Xuất Excel', 'ibft_export'), Markup.button.callback('📤 Xuất ALL', 'ibft_export_all')]);
+    rows.push([Markup.button.callback('❌ Đóng', 'ibft_hist_close')]);
+    try {
+      await ctx.editMessageText(pageData.text, { parse_mode: 'Markdown', reply_markup: Markup.inlineKeyboard(rows).reply_markup });
+    } catch (_) {}
+  }
+
+  bot.action(/^ibft_hist_page:(\d+)$/, async (ctx) => {
+    try {
+      await ctx.answerCbQuery();
+    } catch (_) {}
+    if (!isAdminId(ctx.from.id)) return;
+    const st = ibftHistState.get(ctx.from.id) || { type: 'all', range: 'all', page: 1 };
+    await updateIbftHistMessage(ctx, { ...st, page: Number(ctx.match[1] || 1) });
+  });
+
+  bot.action(/^ibft_hist_type:(all|success|name_error|account_error|other_error)$/, async (ctx) => {
+    try {
+      await ctx.answerCbQuery();
+    } catch (_) {}
+    if (!isAdminId(ctx.from.id)) return;
+    const st = ibftHistState.get(ctx.from.id) || { type: 'all', range: 'all', page: 1 };
+    await updateIbftHistMessage(ctx, { ...st, type: String(ctx.match[1] || 'all'), page: 1 });
+  });
+
+  bot.action(/^ibft_hist_range:(all|today|7d)$/, async (ctx) => {
+    try {
+      await ctx.answerCbQuery();
+    } catch (_) {}
+    if (!isAdminId(ctx.from.id)) return;
+    const st = ibftHistState.get(ctx.from.id) || { type: 'all', range: 'all', page: 1 };
+    await updateIbftHistMessage(ctx, { ...st, range: String(ctx.match[1] || 'all'), page: 1 });
+  });
+
+  bot.action('ibft_hist_close', async (ctx) => {
+    try {
+      await ctx.answerCbQuery();
+    } catch (_) {}
+    ibftHistState.delete(ctx.from.id);
+    try {
+      await ctx.editMessageReplyMarkup(undefined);
+    } catch (_) {}
+  });
+
+  async function exportIbftCsv(ctx, state, forceAll) {
+    const all = db.getAllIbftHistory();
+    const st = state || { type: 'all', range: 'all', page: 1 };
+    const type = forceAll ? 'all' : String(st.type || 'all');
+    const range = forceAll ? 'all' : String(st.range || 'all');
+    const filtered = filterIbft(all, type, range);
+    const headers = [
+      'ts',
+      'datetime_vn',
+      'type',
+      'adminId',
+      'merchant',
+      'bankCode',
+      'accountNumber',
+      'accountName',
+      'amount',
+      'remark',
+      'orderId',
+      'tranStatus',
+      'errorCode',
+      'errorMessage',
+    ];
+    const rows = filtered.map((it) => [
+      String(Number(it.ts) || 0),
+      formatDateTimeVN(it.ts),
+      classifyIbft(it),
+      String(it.adminId || ''),
+      String(it.merchant || ''),
+      String(it.bankCode || ''),
+      String(it.accountNumber || ''),
+      String(it.accountName || ''),
+      String(Number(it.amount) || 0),
+      String(it.remark || ''),
+      String(it.orderId || ''),
+      String(it.tranStatus || ''),
+      String(it.errorCode || ''),
+      String(it.errorMessage || ''),
+    ]);
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+    const filename = `ibft_${range}_${type}_${stamp}.csv`.replace(/[^\w.-]/g, '_');
+    const filePath = writeCsvFile(filename, headers, rows);
+    await bot.telegram.sendDocument(ctx.chat.id, { source: fs.createReadStream(filePath), filename }, { caption: `Xuất chi hộ: ${rows.length} dòng` });
+    try {
+      fs.unlinkSync(filePath);
+    } catch (_) {}
+  }
+
+  function parseDateYmdToTs(s) {
+    const m = String(s || '').trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!m) return null;
+    const y = Number(m[1]);
+    const mo = Number(m[2]);
+    const d = Number(m[3]);
+    if (!y || mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+    const dt = new Date(`${m[1]}-${m[2]}-${m[3]}T00:00:00+07:00`);
+    if (Number.isNaN(dt.getTime())) return null;
+    return dt.getTime();
+  }
+
+  bot.command('ibftexport', async (ctx) => {
+    if (!isAdminId(ctx.from.id)) return;
+    const parts = String(ctx.message?.text || '').trim().split(/\s+/);
+    const arg1 = String(parts[1] || '').trim().toLowerCase();
+    if (!arg1) {
+      await ctx.reply('Cú pháp: /ibftexport all | /ibftexport <from YYYY-MM-DD> <to YYYY-MM-DD> [all|success|name_error|account_error|other_error]', menuKeyboard(ctx));
+      return;
+    }
+    if (arg1 === 'all') {
+      await exportIbftCsv(ctx, { type: 'all', range: 'all', page: 1 }, true);
+      return;
+    }
+    const fromTs = parseDateYmdToTs(parts[1]);
+    const toStart = parseDateYmdToTs(parts[2]);
+    const type = String(parts[3] || 'all').trim();
+    if (!fromTs || !toStart) {
+      await ctx.reply('Sai ngày. Dùng dạng YYYY-MM-DD. Ví dụ: /ibftexport 2026-03-01 2026-03-31 success', menuKeyboard(ctx));
+      return;
+    }
+    const toTs = toStart + 24 * 60 * 60 * 1000 - 1;
+    const all = db.getAllIbftHistory();
+    const filtered = all.filter((it) => {
+      const ts = Number(it.ts) || 0;
+      if (ts < fromTs || ts > toTs) return false;
+      if (type === 'all') return true;
+      return classifyIbft(it) === type;
+    });
+    const headers = [
+      'ts',
+      'datetime_vn',
+      'type',
+      'adminId',
+      'merchant',
+      'bankCode',
+      'accountNumber',
+      'accountName',
+      'amount',
+      'remark',
+      'orderId',
+      'tranStatus',
+      'errorCode',
+      'errorMessage',
+    ];
+    const rows = filtered.map((it) => [
+      String(Number(it.ts) || 0),
+      formatDateTimeVN(it.ts),
+      classifyIbft(it),
+      String(it.adminId || ''),
+      String(it.merchant || ''),
+      String(it.bankCode || ''),
+      String(it.accountNumber || ''),
+      String(it.accountName || ''),
+      String(Number(it.amount) || 0),
+      String(it.remark || ''),
+      String(it.orderId || ''),
+      String(it.tranStatus || ''),
+      String(it.errorCode || ''),
+      String(it.errorMessage || ''),
+    ]);
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+    const filename = `ibft_${parts[1]}_${parts[2]}_${type}_${stamp}.csv`.replace(/[^\w.-]/g, '_');
+    const filePath = writeCsvFile(filename, headers, rows);
+    await bot.telegram.sendDocument(ctx.chat.id, { source: fs.createReadStream(filePath), filename }, { caption: `Xuất chi hộ: ${rows.length} dòng` });
+    try {
+      fs.unlinkSync(filePath);
+    } catch (_) {}
+  });
+
+  bot.action('ibft_export', async (ctx) => {
+    try {
+      await ctx.answerCbQuery();
+    } catch (_) {}
+    if (!isAdminId(ctx.from.id)) return;
+    try {
+      const st = ibftHistState.get(ctx.from.id) || { type: 'all', range: 'all', page: 1 };
+      await exportIbftCsv(ctx, st, false);
+    } catch (e) {
+      await ctx.reply(`Lỗi xuất excel chi hộ: ${e.message}`, menuKeyboard(ctx));
+    }
+  });
+
+  bot.action('ibft_export_all', async (ctx) => {
+    try {
+      await ctx.answerCbQuery();
+    } catch (_) {}
+    if (!isAdminId(ctx.from.id)) return;
+    try {
+      await exportIbftCsv(ctx, { type: 'all', range: 'all', page: 1 }, true);
+    } catch (e) {
+      await ctx.reply(`Lỗi xuất excel chi hộ: ${e.message}`, menuKeyboard(ctx));
+    }
   });
 
   bot.command('user', async (ctx) => {
@@ -1704,21 +2450,42 @@ const ibftState = new Map();
       return;
     }
     const pending = db.getWithdrawals({ status: 'pending', limit: 10 });
-    const all = pending.length ? pending : db.getWithdrawals({ limit: 10 });
-    if (!all.length) {
+    const done = db.getWithdrawals({ status: 'done', limit: 10 });
+    const reject = db.getWithdrawals({ status: 'reject', limit: 10 });
+    if (!pending.length && !done.length && !reject.length) {
       await ctx.reply('Chưa có yêu cầu rút tiền nào.', menuKeyboard(ctx));
       return;
     }
-    const lines = ['Danh sách rút tiền:'];
-    for (const w of all) {
-      lines.push(
-        `- ID: ${w.id} | ${w.method} | ${w.amount} | ${w.status}` +
-          (w.method === 'bank'
-            ? ` | ${w.bankName}-${w.bankAccount}-${w.bankHolder}`
-            : ` | ${w.network}-${w.wallet?.slice(0, 8)}...`)
-      );
+    const fmt = (w) => {
+      const method = String(w.method || '').toLowerCase();
+      const amtNum = toAmountNumber(w.amount);
+      const amtStr = amtNum ? `${amtNum.toLocaleString()}đ` : String(w.amount || '0');
+      if (method === 'bank') {
+        const bank = String(w.bankName || '').trim();
+        const acc = String(w.bankAccount || '').trim();
+        const holder = String(w.bankHolder || '').trim().toUpperCase();
+        return `• 🆔 ${w.id}\n  💵 ${amtStr}\n  🏦 ${bank} | 💳 ${acc}\n  👤 ${holder}`;
+      }
+      const net = String(w.network || '').trim().toUpperCase();
+      const wallet = String(w.wallet || '').trim();
+      return `• 🆔 ${w.id}\n  💵 ${amtStr}\n  🌐 ${net} | 👛 ${wallet.slice(0, 10)}...`;
+    };
+    const lines = [];
+    lines.push('📋 *DANH SÁCH RÚT TIỀN*');
+    lines.push('');
+    if (pending.length) {
+      lines.push('⏳ *Đang chờ*');
+      for (const w of pending) lines.push(fmt(w), '');
     }
-    await ctx.reply(lines.join('\n'), menuKeyboard(ctx));
+    if (done.length) {
+      lines.push('✅ *Thành công*');
+      for (const w of done) lines.push(fmt(w), '');
+    }
+    if (reject.length) {
+      lines.push('❌ *Từ chối*');
+      for (const w of reject) lines.push(fmt(w), '');
+    }
+    await ctx.replyWithMarkdown(lines.join('\n').trim(), menuKeyboard(ctx));
   });
 
   const awaitingWdUpdate = new Map();

@@ -9,6 +9,7 @@ const USERS_FILE = path.join(DATA_DIR, 'users.enc');
 const CONFIG_FILE = path.join(DATA_DIR, 'config.enc');
 const BALANCE_HISTORY_FILE = path.join(DATA_DIR, 'balance_history.enc');
 const USER_BALANCE_HISTORY_FILE = path.join(DATA_DIR, 'user_balance_history.enc');
+const IBFT_HISTORY_FILE = path.join(DATA_DIR, 'ibft_history.enc');
 const KEY_FILE = path.join(DATA_DIR, 'db.key');
 
 function deriveKey(secret) {
@@ -138,6 +139,7 @@ function ensureStore() {
   if (!fs.existsSync(CONFIG_FILE)) writeEncryptedFile(CONFIG_FILE, { globalFeePercent: 0 });
   if (!fs.existsSync(BALANCE_HISTORY_FILE)) writeEncryptedFile(BALANCE_HISTORY_FILE, []);
   if (!fs.existsSync(USER_BALANCE_HISTORY_FILE)) writeEncryptedFile(USER_BALANCE_HISTORY_FILE, []);
+  if (!fs.existsSync(IBFT_HISTORY_FILE)) writeEncryptedFile(IBFT_HISTORY_FILE, []);
 }
 
 ensureStore();
@@ -231,11 +233,26 @@ function getUser(id) {
   return users[key];
 }
 
+function findUser(id) {
+  const users = loadUsers();
+  const key = String(id);
+  return users[key] || null;
+}
+
 function updateUser(id, data) {
   const users = loadUsers();
   const key = String(id);
   if (!users[key]) {
-    users[key] = { id: key, isActive: false, feePercent: null, vaLimit: null, balance: 0, createdVA: 0 };
+    users[key] = {
+      id: key,
+      isActive: false,
+      feePercent: null,
+      ipnFeeFlat: null,
+      withdrawFeeFlat: null,
+      vaLimit: null,
+      balance: 0,
+      createdVA: 0,
+    };
   }
   users[key] = { ...users[key], ...data };
   if (users[key].balance < 0) users[key].balance = 0;
@@ -255,6 +272,48 @@ function updateConfig(data) {
   const conf = getConfig();
   writeEncryptedFile(CONFIG_FILE, { ...conf, ...data });
   return getConfig();
+}
+
+function loadIbftHistory() {
+  return readEncryptedFile(IBFT_HISTORY_FILE, []);
+}
+
+function saveIbftHistory(arr) {
+  writeEncryptedFile(IBFT_HISTORY_FILE, arr);
+}
+
+function addIbftHistory(entry) {
+  const arr = loadIbftHistory();
+  const e = entry && typeof entry === 'object' ? entry : {};
+  arr.push({
+    ts: Number(e.ts) || Date.now(),
+    adminId: e.adminId ? String(e.adminId) : '',
+    merchant: e.merchant ? String(e.merchant) : '',
+    bankCode: e.bankCode ? String(e.bankCode) : '',
+    accountNumber: e.accountNumber ? String(e.accountNumber) : '',
+    accountName: e.accountName ? String(e.accountName) : '',
+    amount: Number(e.amount) || 0,
+    remark: e.remark ? String(e.remark) : '',
+    orderId: e.orderId ? String(e.orderId) : '',
+    tranStatus: e.tranStatus ? String(e.tranStatus) : '',
+    errorCode: e.errorCode ? String(e.errorCode) : '',
+    errorMessage: e.errorMessage ? String(e.errorMessage) : '',
+  });
+  const max = 500;
+  if (arr.length > max) arr.splice(0, arr.length - max);
+  saveIbftHistory(arr);
+  return arr[arr.length - 1];
+}
+
+function getIbftHistory(limit = 20) {
+  const arr = loadIbftHistory();
+  const n = Math.max(1, Math.min(200, Number(limit) || 20));
+  return arr.slice().sort((a, b) => (b.ts || 0) - (a.ts || 0)).slice(0, n);
+}
+
+function getAllIbftHistory() {
+  const arr = loadIbftHistory();
+  return arr.slice().sort((a, b) => (b.ts || 0) - (a.ts || 0));
 }
 
 function loadBalanceHistory() {
@@ -333,6 +392,7 @@ module.exports = {
   updateWithdrawalStatus,
   getWithdrawalById,
   getUser,
+  findUser,
   updateUser,
   getAllUsers,
   getConfig,
@@ -341,6 +401,9 @@ module.exports = {
   getBalanceHistory,
   addUserBalanceHistory,
   getUserBalanceHistory,
+  addIbftHistory,
+  getIbftHistory,
+  getAllIbftHistory,
   getVAsByUser,
   // expose internal methods for migration script
   loadAll,
