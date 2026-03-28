@@ -8,6 +8,7 @@ const WD_FILE = path.join(DATA_DIR, 'withdrawals.enc');
 const USERS_FILE = path.join(DATA_DIR, 'users.enc');
 const CONFIG_FILE = path.join(DATA_DIR, 'config.enc');
 const BALANCE_HISTORY_FILE = path.join(DATA_DIR, 'balance_history.enc');
+const USER_BALANCE_HISTORY_FILE = path.join(DATA_DIR, 'user_balance_history.enc');
 const KEY_FILE = path.join(DATA_DIR, 'db.key');
 
 function deriveKey(secret) {
@@ -136,6 +137,7 @@ function ensureStore() {
   if (!fs.existsSync(USERS_FILE)) writeEncryptedFile(USERS_FILE, {});
   if (!fs.existsSync(CONFIG_FILE)) writeEncryptedFile(CONFIG_FILE, { globalFeePercent: 0 });
   if (!fs.existsSync(BALANCE_HISTORY_FILE)) writeEncryptedFile(BALANCE_HISTORY_FILE, []);
+  if (!fs.existsSync(USER_BALANCE_HISTORY_FILE)) writeEncryptedFile(USER_BALANCE_HISTORY_FILE, []);
 }
 
 ensureStore();
@@ -276,6 +278,38 @@ function getBalanceHistory(limit = 50) {
   return arr.slice().sort((a, b) => (b.ts || 0) - (a.ts || 0)).slice(0, n);
 }
 
+function loadUserBalanceHistory() {
+  return readEncryptedFile(USER_BALANCE_HISTORY_FILE, []);
+}
+
+function saveUserBalanceHistory(arr) {
+  writeEncryptedFile(USER_BALANCE_HISTORY_FILE, arr);
+}
+
+function addUserBalanceHistory(entry) {
+  const arr = loadUserBalanceHistory();
+  const e = entry && typeof entry === 'object' ? entry : {};
+  arr.push({
+    ts: Number(e.ts) || Date.now(),
+    userId: e.userId ? String(e.userId) : '',
+    delta: Number(e.delta) || 0,
+    balanceAfter: Number(e.balanceAfter) || 0,
+    reason: e.reason ? String(e.reason) : '',
+    ref: e.ref ? String(e.ref) : '',
+  });
+  const max = 3000;
+  if (arr.length > max) arr.splice(0, arr.length - max);
+  saveUserBalanceHistory(arr);
+  return arr[arr.length - 1];
+}
+
+function getUserBalanceHistory(userId, limit = 30) {
+  const uid = String(userId || '').trim();
+  const n = Math.max(1, Math.min(200, Number(limit) || 30));
+  const arr = loadUserBalanceHistory().filter((x) => String(x.userId) === uid);
+  return arr.slice().sort((a, b) => (b.ts || 0) - (a.ts || 0)).slice(0, n);
+}
+
 function getVAsByUser(userId, limit = 10) {
   const arr = loadAll();
   const uid = String(userId);
@@ -296,6 +330,8 @@ module.exports = {
   updateConfig,
   addBalanceHistory,
   getBalanceHistory,
+  addUserBalanceHistory,
+  getUserBalanceHistory,
   getVAsByUser,
   // expose internal methods for migration script
   loadAll,

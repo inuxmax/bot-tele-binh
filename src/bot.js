@@ -574,7 +574,11 @@ app.get('/va/callback', async (req, res) => {
 
     if (rec.status !== 'paid' && rec.userId) {
       const u = db.getUser(rec.userId);
-      db.updateUser(rec.userId, { balance: u.balance + credited });
+      const after = u.balance + credited;
+      db.updateUser(rec.userId, { balance: after });
+      try {
+        db.addUserBalanceHistory({ ts: Date.now(), userId: rec.userId, delta: credited, balanceAfter: after, reason: 'ipn', ref: clientRequestId });
+      } catch (_) {}
     }
     db.upsert({
       ...rec,
@@ -1470,6 +1474,8 @@ const ibftState = new Map();
       `/setfee all <%> : Set % phí chung\n` +
       `/setipnfee <số> : Set phí giao dịch tiền về (VNĐ)\n` +
       `/balhist [n] : Xem lịch sử số dư admin\n` +
+      `/user <id> : Xem thông tin user\n` +
+      `/uhist <id> [n] : Xem lịch sử số dư user\n` +
       `/setlimit <id> <số> : Set giới hạn VA cho user\n` +
       `/users : Xem danh sách user\n` +
       `/admins : Xem danh sách admin`;
@@ -1568,6 +1574,54 @@ const ibftState = new Map();
     await ctx.reply(`Lịch sử số dư (mới nhất):\n${lines.join('\n')}`, menuKeyboard(ctx));
   });
 
+  bot.command('user', async (ctx) => {
+    if (!isAdminId(ctx.from.id)) return;
+    const parts = String(ctx.message?.text || '').trim().split(/\s+/);
+    const id = String(parts[1] || '').trim();
+    if (!id) {
+      await ctx.reply('Cú pháp: /user <id>', menuKeyboard(ctx));
+      return;
+    }
+    const u = db.getUser(id);
+    const config = db.getConfig();
+    const feePercent = u.feePercent !== null ? u.feePercent : config.globalFeePercent;
+    const lines = [];
+    lines.push(`ID: ${u.id}`);
+    lines.push(`Trạng thái: ${u.isActive ? 'Active' : 'Inactive'}`);
+    lines.push(`Số dư: ${Number(u.balance || 0).toLocaleString()}đ`);
+    lines.push(`Phí rút: ${feePercent}%`);
+    lines.push(`VA: ${u.createdVA}/${u.vaLimit !== null ? u.vaLimit : '∞'}`);
+    const saved = Array.isArray(u.withdrawBanks) ? u.withdrawBanks : [];
+    if (saved.length) lines.push(`Bank đã lưu: ${saved.length}`);
+    await ctx.reply(lines.join('\n'), menuKeyboard(ctx));
+  });
+
+  bot.command('uhist', async (ctx) => {
+    if (!isAdminId(ctx.from.id)) return;
+    const parts = String(ctx.message?.text || '').trim().split(/\s+/);
+    const id = String(parts[1] || '').trim();
+    const limit = Math.max(1, Math.min(50, Number(parts[2] || 20) || 20));
+    if (!id) {
+      await ctx.reply('Cú pháp: /uhist <id> [n]', menuKeyboard(ctx));
+      return;
+    }
+    const items = db.getUserBalanceHistory(id, limit);
+    if (!items.length) {
+      await ctx.reply('Chưa có lịch sử số dư user này.', menuKeyboard(ctx));
+      return;
+    }
+    const lines = items.map((it) => {
+      const ts = formatDateTimeVN(it.ts);
+      const delta = Number(it.delta) || 0;
+      const sign = delta >= 0 ? '+' : '';
+      const bal = Number(it.balanceAfter) || 0;
+      const reason = String(it.reason || '');
+      const ref = String(it.ref || '');
+      return `${ts} | ${sign}${delta.toLocaleString()}đ | ${bal.toLocaleString()}đ${reason ? ` | ${reason}` : ''}${ref ? ` | ${ref}` : ''}`;
+    });
+    await ctx.reply(`Lịch sử số dư user ${id} (mới nhất):\n${lines.join('\n')}`, menuKeyboard(ctx));
+  });
+
 
 
   bot.hears('💸 Rút tiền', async (ctx) => {
@@ -1633,7 +1687,12 @@ const ibftState = new Map();
     if (w.status !== 'done') {
        if (w.status === 'reject') {
          const u = db.getUser(w.userId);
-         db.updateUser(w.userId, { balance: u.balance - Number(w.amount) }); // deduct back
+         const delta = -(Number(w.amount) || 0);
+         const after = u.balance + delta;
+         db.updateUser(w.userId, { balance: after }); // deduct back
+         try {
+           db.addUserBalanceHistory({ ts: Date.now(), userId: w.userId, delta, balanceAfter: after, reason: 'withdraw_deduct_back', ref: w.id });
+         } catch (_) {}
        }
        db.updateWithdrawalStatus(st.id, 'done');
     }
@@ -1653,7 +1712,12 @@ const ibftState = new Map();
     if (!w) return;
     if (w.status === 'reject') {
        const u = db.getUser(w.userId);
-       db.updateUser(w.userId, { balance: u.balance - Number(w.amount) }); // deduct back
+       const delta = -(Number(w.amount) || 0);
+       const after = u.balance + delta;
+       db.updateUser(w.userId, { balance: after }); // deduct back
+       try {
+         db.addUserBalanceHistory({ ts: Date.now(), userId: w.userId, delta, balanceAfter: after, reason: 'withdraw_deduct_back', ref: w.id });
+       } catch (_) {}
     }
     db.updateWithdrawalStatus(st.id, 'pending');
     awaitingWdUpdate.delete(ctx.from.id);
@@ -1672,7 +1736,12 @@ const ibftState = new Map();
     if (!w) return;
     if (w.status !== 'reject') {
        const u = db.getUser(w.userId);
-       db.updateUser(w.userId, { balance: u.balance + Number(w.amount) }); // refund
+       const delta = Number(w.amount) || 0;
+       const after = u.balance + delta;
+       db.updateUser(w.userId, { balance: after }); // refund
+       try {
+         db.addUserBalanceHistory({ ts: Date.now(), userId: w.userId, delta, balanceAfter: after, reason: 'withdraw_refund', ref: w.id });
+       } catch (_) {}
     }
     db.updateWithdrawalStatus(st.id, 'reject');
     awaitingWdUpdate.delete(ctx.from.id);
@@ -2062,6 +2131,9 @@ const ibftState = new Map();
         const actualReceive = amount - (amount * feePercent / 100);
 
         db.updateUser(ctx.from.id, { balance: user.balance - amount });
+        try {
+          db.addUserBalanceHistory({ ts: Date.now(), userId: ctx.from.id, delta: -amount, balanceAfter: user.balance - amount, reason: 'withdraw_create', ref: id });
+        } catch (_) {}
 
         const id = `WD${Date.now().toString().slice(-10)}${Math.floor(100000 + Math.random() * 900000)}`;
         const rec = {
@@ -2082,26 +2154,33 @@ const ibftState = new Map();
         };
         db.addWithdrawal(rec);
         withdrawState.delete(ctx.from.id);
-        await ctx.reply(
-          `Đã tạo yêu cầu rút tiền\nID: ${id}\nPhương thức: ${rec.method}\n` +
-          (rec.method === 'bank'
-            ? `Ngân hàng: ${rec.bankName}\nSTK: ${rec.bankAccount}\nChủ TK: ${rec.bankHolder}\n`
-            : `Network: ${rec.network}\nVí: ${rec.wallet}\n`) +
-          `Số dư bị trừ: ${amount.toLocaleString()}đ\nPhí rút: ${feePercent}%\nThực nhận: ${actualReceive.toLocaleString()}đ\nTrạng thái: pending`,
-          menuKeyboard(ctx)
-        );
+        const userAfter = db.getUser(ctx.from.id);
+        const msgUser =
+          `✅ Yêu cầu rút tiền đã được tạo\n\n` +
+          `💵 Số tiền: ${amount.toLocaleString()} đ\n` +
+          `🏦 Ngân hàng: ${rec.bankName}\n` +
+          `💳 STK: ${rec.bankAccount}\n` +
+          `👤 Chủ TK: ${rec.bankHolder}\n` +
+          `💰 Số dư còn lại: ${Number(userAfter.balance || 0).toLocaleString()} đ\n` +
+          `📉 Phí rút: ${feePercent}%\n\n` +
+          `⏳ Đang chờ duyệt...`;
+        await ctx.reply(msgUser, menuKeyboard(ctx));
         const adminRaw = process.env.ADMIN_IDS || '';
         const adminIds = adminRaw.split(',').map((s) => s.trim()).filter(Boolean);
         for (const aid of adminIds) {
           try {
-            await bot.telegram.sendMessage(
-              aid,
-              `Yêu cầu rút tiền mới\nID: ${id}\nUser: ${ctx.from.username || ctx.from.id}\nSố dư user: ${user.balance.toLocaleString()}đ\n` +
-              (rec.method === 'bank'
-                ? `Ngân hàng: ${rec.bankName}\nSTK: ${rec.bankAccount}\nChủ TK: ${rec.bankHolder}\n`
-                : `Network: ${rec.network}\nVí: ${rec.wallet}\n`) +
-              `Số tiền trừ: ${amount.toLocaleString()}đ\nThực nhận: ${actualReceive.toLocaleString()}đ`
-            );
+            const userLabel = ctx.from.username ? `@${ctx.from.username}` : String(ctx.from.id);
+            const msgAdmin =
+              `🆕 Yêu cầu rút tiền mới\n\n` +
+              `🆔 ID: ${id}\n` +
+              `👤 User: ${userLabel}\n` +
+              `💰 Số dư user: ${Number(user.balance || 0).toLocaleString()}đ\n\n` +
+              `🏦 Ngân hàng: ${rec.bankName}\n` +
+              `💳 STK: ${rec.bankAccount}\n` +
+              `👤 Chủ TK: ${rec.bankHolder}\n\n` +
+              `💵 Số tiền trừ: ${amount.toLocaleString()}đ\n` +
+              `✅ Thực nhận: ${actualReceive.toLocaleString()}đ`;
+            await bot.telegram.sendMessage(aid, msgAdmin);
           } catch (_) {}
         }
         return;
