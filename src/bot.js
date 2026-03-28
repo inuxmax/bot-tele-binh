@@ -384,7 +384,6 @@ if (!bot) {
   const USER_BOT_COMMANDS = [
     { command: 'start', description: 'Bắt đầu' },
     { command: 'menu', description: 'Mở menu thao tác' },
-    { command: 'status', description: 'Kiểm tra tài khoản: /status <clientRequestId>' },
     { command: 'id', description: 'Xem Telegram ID của bạn' },
   ];
 
@@ -632,6 +631,16 @@ if (!bot) {
 
   bot.start(async (ctx) => {
     await syncCommandMenuForChat(ctx);
+    const sendGuide = async () => {
+      const guideMsg =
+        `📌 HƯỚNG DẪN LẤY BANK (Cách sử dụng)\n\n` +
+        `1️⃣ Nhấn "🎲 Random tên" để lấy nhanh một VA ngẫu nhiên.\n` +
+        `2️⃣ Nhấn "✍️ Nhập tên" để tạo VA theo tên khách hàng mong muốn.\n` +
+        `3️⃣ Nhấn "🔎 Kiểm tra tài khoản" để kiểm tra giao dịch của VA.\n` +
+        `4️⃣ Nhấn "💸 Rút tiền" để yêu cầu rút số dư khả dụng.\n\n` +
+        `Chào bạn! Vui lòng chọn thao tác bên dưới:`;
+      await ctx.reply(guideMsg, menuKeyboard(ctx));
+    };
     if (!isAdminId(ctx.from.id)) {
       const u = db.getUser(ctx.from.id);
       if (!u.isActive) {
@@ -640,15 +649,7 @@ if (!bot) {
          return ctx.replyWithMarkdown(msg, Markup.removeKeyboard());
       }
     }
-    
-    const guideMsg = `📌 HƯỚNG DẪN LẤY BANK (Cách sử dụng)\n\n` +
-      `1️⃣ Nhấn "🎲 Random tên" để lấy nhanh một VA ngẫu nhiên.\n` +
-      `2️⃣ Nhấn "✍️ Nhập tên" để tạo VA theo tên khách hàng mong muốn.\n` +
-      `3️⃣ Nhấn "🔎 Kiểm tra tài khoản" để kiểm tra giao dịch của VA.\n` +
-      `4️⃣ Nhấn "💸 Rút tiền" để yêu cầu rút số dư khả dụng.\n\n` +
-      `Chào bạn! Vui lòng chọn thao tác bên dưới:`;
-    
-    await ctx.reply(guideMsg, menuKeyboard(ctx));
+    await sendGuide();
   });
 
 const confirmCreateState = new Map();
@@ -831,7 +832,14 @@ const ibftState = new Map();
   bot.command('menu', async (ctx) => {
     awaitingName.delete(ctx.from.id);
     await syncCommandMenuForChat(ctx);
-    await ctx.reply('Menu:', menuKeyboard(ctx));
+    const guideMsg =
+      `📌 HƯỚNG DẪN LẤY BANK (Cách sử dụng)\n\n` +
+      `1️⃣ Nhấn "🎲 Random tên" để lấy nhanh một VA ngẫu nhiên.\n` +
+      `2️⃣ Nhấn "✍️ Nhập tên" để tạo VA theo tên khách hàng mong muốn.\n` +
+      `3️⃣ Nhấn "🔎 Kiểm tra tài khoản" để kiểm tra giao dịch của VA.\n` +
+      `4️⃣ Nhấn "💸 Rút tiền" để yêu cầu rút số dư khả dụng.\n\n` +
+      `Chào bạn! Vui lòng chọn thao tác bên dưới:`;
+    await ctx.reply(guideMsg, menuKeyboard(ctx));
   });
 
   const { getAccessToken } = require('./hpayAuth');
@@ -1233,17 +1241,6 @@ const ibftState = new Map();
   bot.hears('🔎 Kiểm tra tài khoản', async (ctx) => {
     awaitingStatus.set(ctx.from.id, true);
     await ctx.reply('Nhập ClientRequestId để kiểm tra:');
-  });
-
-  bot.command('status', async (ctx) => {
-    const txt = ctx.message?.text || '';
-    const parts = txt.split(/\s+/);
-    const id = parts[1];
-    if (!id) {
-      await ctx.reply('Cú pháp: /status <clientRequestId>', menuKeyboard(ctx));
-      return;
-    }
-    await ctx.reply(formatStatus(id), menuKeyboard(ctx));
   });
 
   bot.on('text', async (ctx, next) => {
