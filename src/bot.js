@@ -498,7 +498,7 @@ function menuKeyboard(ctx) {
 }
 
 function isMenuText(t) {
-  return t === '🎲 Random tên' || t === '✍️ Nhập tên' || t === '💰 Số dư' || t === '📜 Lịch sử chi hộ' || t === '🔎 Kiểm tra tài khoản' || t === '💸 Rút tiền' || t === '📋 DS rút' || t === '🔄 Cập nhật rút' || t === '⚙️ Quản lý' || t === '🗂 VA đã tạo' || t === 'ℹ️ Thông tin' || t === 'Đã rút' || t === 'Chưa rút' || t === 'Từ chối' || t === 'Rút ALL' || t === '✅ Xác nhận tạo' || t === '✅ Xác nhận chi hộ' || t === '❌ Hủy' || t === '/menu' || t === '/start' || t === '🏧 Chi hộ' || t === '🏦 MSB' || t === '🏦 KLB' || t === '🏦 BIDV (BẢO TRÌ)';
+  return t === '🎲 Random tên' || t === '✍️ Nhập tên' || t === '💰 Số dư' || t === '📜 Lịch sử chi hộ' || t === '🔎 Kiểm tra tài khoản' || t === '💸 Rút tiền' || t === '📋 DS rút' || t === '🔄 Cập nhật rút' || t === '⚙️ Quản lý' || t === '🗂 VA đã tạo' || t === 'ℹ️ Thông tin' || t === 'Đã rút' || t === 'Chưa rút' || t === 'Từ chối' || t === 'Từ chối sai STK/Tên' || t === 'Rút ALL' || t === '✅ Xác nhận tạo' || t === '✅ Xác nhận chi hộ' || t === '❌ Hủy' || t === '/menu' || t === '/start' || t === '🏧 Chi hộ' || t === '🏦 MSB' || t === '🏦 KLB' || t === '🏦 BIDV (BẢO TRÌ)';
 }
 
 const app = express();
@@ -2487,25 +2487,53 @@ const ibftState = new Map();
       return;
     }
     const pending = db.getWithdrawals({ status: 'pending', limit: 10 });
-    const done = db.getWithdrawals({ status: 'done', limit: 10 });
     const reject = db.getWithdrawals({ status: 'reject', limit: 10 });
-    if (!pending.length && !done.length && !reject.length) {
+    if (!pending.length && !reject.length) {
       await ctx.reply('Chưa có yêu cầu rút tiền nào.', menuKeyboard(ctx));
       return;
     }
     const fmt = (w) => {
+      const status = String(w.status || '').trim().toLowerCase();
+      const rejectReason = String(w.rejectReason || '').trim().toLowerCase();
+      const title =
+        status === 'pending'
+          ? '🆕 Yêu cầu rút tiền mới'
+          : status === 'done'
+            ? '✅ Rút tiền thành công'
+            : status === 'reject' && rejectReason === 'wrong_info'
+              ? '❌ Từ chối (sai STK/Tên)'
+              : status === 'reject'
+                ? '❌ Rút tiền bị từ chối'
+                : '📌 Yêu cầu rút tiền';
+      const userLabel = w.username ? `@${String(w.username).trim()}` : String(w.userId || '').trim();
+      const bal = w.balanceBefore !== null && w.balanceBefore !== undefined ? Number(w.balanceBefore) || 0 : w.userId ? Number(db.getUser(w.userId).balance || 0) : 0;
+      const amt = Number(w.amount) || toAmountNumber(w.amount);
+      const feeFlat = Number(w.feeFlat) || 0;
+      const feePercent = w.feePercent === null || w.feePercent === undefined ? null : Number(w.feePercent) || 0;
+      const feeByPercent = w.feeByPercent !== null && w.feeByPercent !== undefined ? Number(w.feeByPercent) || 0 : feePercent === null ? 0 : Math.floor((amt * feePercent) / 100);
+      const actual = Number(w.actualReceive) || Math.max(0, amt - feeFlat - feeByPercent);
+      const lines = [];
+      lines.push(`*${escapeMd(title)}*`);
+      lines.push(`🆔 ID: *${escapeMd(String(w.id || ''))}*`);
+      lines.push(`👤 User: ${escapeMd(userLabel)}`);
+      lines.push(`💰 Số dư user: ${bal.toLocaleString()}đ`);
+      lines.push('');
+
       const method = String(w.method || '').toLowerCase();
-      const amtNum = toAmountNumber(w.amount);
-      const amtStr = amtNum ? `${amtNum.toLocaleString()}đ` : String(w.amount || '0');
       if (method === 'bank') {
-        const bank = String(w.bankName || '').trim();
-        const acc = String(w.bankAccount || '').trim();
-        const holder = String(w.bankHolder || '').trim().toUpperCase();
-        return `• 🆔 ${w.id}\n  💵 ${amtStr}\n  🏦 ${bank} | 💳 ${acc}\n  👤 ${holder}`;
+        lines.push(`🏦 Ngân hàng: ${escapeMd(String(w.bankName || '').trim())}`);
+        lines.push(`💳 STK: ${escapeMd(String(w.bankAccount || '').trim())}`);
+        lines.push(`👤 Chủ TK: ${escapeMd(String(w.bankHolder || '').trim().toUpperCase())}`);
+      } else {
+        lines.push(`🌐 Network: ${escapeMd(String(w.network || '').trim().toUpperCase())}`);
+        lines.push(`👛 Ví: ${escapeMd(String(w.wallet || '').trim())}`);
       }
-      const net = String(w.network || '').trim().toUpperCase();
-      const wallet = String(w.wallet || '').trim();
-      return `• 🆔 ${w.id}\n  💵 ${amtStr}\n  🌐 ${net} | 👛 ${wallet.slice(0, 10)}...`;
+      lines.push('');
+      lines.push(`💵 Số tiền trừ: ${amt.toLocaleString()}đ`);
+      lines.push(`💸 Phí chuyển: ${feeFlat.toLocaleString()}đ`);
+      if (feePercent !== null) lines.push(`📉 Phí rút: ${feePercent}%`);
+      lines.push(`💰 Thực nhận: ${actual.toLocaleString()}đ`);
+      return lines.join('\n');
     };
     const lines = [];
     lines.push('📋 *DANH SÁCH RÚT TIỀN*');
@@ -2513,10 +2541,6 @@ const ibftState = new Map();
     if (pending.length) {
       lines.push('⏳ *Đang chờ*');
       for (const w of pending) lines.push(fmt(w), '');
-    }
-    if (done.length) {
-      lines.push('✅ *Thành công*');
-      for (const w of done) lines.push(fmt(w), '');
     }
     if (reject.length) {
       lines.push('❌ *Từ chối*');
@@ -2527,7 +2551,6 @@ const ibftState = new Map();
       reply_markup: Markup.inlineKeyboard([
         [
           Markup.button.callback('⏳ Pending', 'wd_export:pending'),
-          Markup.button.callback('✅ Done', 'wd_export:done'),
           Markup.button.callback('❌ Reject', 'wd_export:reject'),
         ],
         [Markup.button.callback('📦 Xuất ALL', 'wd_export:all')],
@@ -2564,7 +2587,10 @@ const ibftState = new Map();
       'amount',
       'feeFlat',
       'feePercent',
+      'feeByPercent',
       'actualReceive',
+      'balanceBefore',
+      'balanceAfter',
     ];
     const rows = filtered.map((w) => [
       String(w.id || ''),
@@ -2584,7 +2610,10 @@ const ibftState = new Map();
       String(Number(w.amount) || 0),
       String(Number(w.feeFlat) || 0),
       w.feePercent === null || w.feePercent === undefined ? '' : String(Number(w.feePercent) || 0),
+      String(Number(w.feeByPercent) || 0),
       String(Number(w.actualReceive) || 0),
+      String(Number(w.balanceBefore) || 0),
+      String(Number(w.balanceAfter) || 0),
     ]);
     const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
     const namePart = `${status}_${fromTs ? 'range' : 'all'}`.replace(/[^\w.-]/g, '_');
@@ -2658,14 +2687,30 @@ const ibftState = new Map();
     if (w.userId) {
       try {
         const amount = Number(w.amount) || 0;
-        const fee = Number(w.feeFlat) || 0;
-        const net = Number(w.actualReceive) || Math.max(0, amount - fee);
-        const msg =
-          `✅ Rút tiền thành công!\n\n` +
-          `💵 Số tiền rút: ${amount.toLocaleString()} đ\n\n` +
-          `💸 Phí chuyển: ${fee.toLocaleString()} đ\n\n` +
-          `💰 Thực nhận: ${net.toLocaleString()} đ\n\n` +
-          `🏦 Đã chuyển vào tài khoản ngân hàng của bạn`;
+        const feeFlat = Number(w.feeFlat) || 0;
+        const feePercent = w.feePercent === null || w.feePercent === undefined ? null : Number(w.feePercent) || 0;
+        const feeByPercent = feePercent === null ? 0 : Math.floor((amount * feePercent) / 100);
+        const net = Number(w.actualReceive) || Math.max(0, amount - feeFlat - feeByPercent);
+        const lines = [];
+        lines.push('✅ Rút tiền thành công!');
+        lines.push(`🆔 ID: ${String(w.id || '').trim()}`);
+        lines.push(`💵 Số tiền rút: ${amount.toLocaleString()} đ`);
+        lines.push(`💸 Phí chuyển: ${feeFlat.toLocaleString()} đ`);
+        if (feePercent !== null) lines.push(`📉 Phí rút: ${feePercent}%`);
+        lines.push(`💰 Thực nhận: ${net.toLocaleString()} đ`);
+        lines.push('');
+        const method = String(w.method || '').toLowerCase();
+        if (method === 'bank') {
+          lines.push(`🏦 Ngân hàng: ${String(w.bankName || '').trim()}`);
+          lines.push(`💳 STK: ${String(w.bankAccount || '').trim()}`);
+          lines.push(`👤 Chủ TK: ${String(w.bankHolder || '').trim().toUpperCase()}`);
+          lines.push('🏦 Đã chuyển vào tài khoản ngân hàng của bạn');
+        } else {
+          lines.push(`🌐 Network: ${String(w.network || '').trim().toUpperCase()}`);
+          lines.push(`👛 Ví: ${String(w.wallet || '').trim()}`);
+          lines.push('✅ Đã chuyển vào ví của bạn');
+        }
+        const msg = lines.join('\n').trim();
         await bot.telegram.sendMessage(w.userId, msg);
       } catch (_) {}
     }
@@ -2709,12 +2754,36 @@ const ibftState = new Map();
          db.addUserBalanceHistory({ ts: Date.now(), userId: w.userId, delta, balanceAfter: after, reason: 'withdraw_refund', ref: w.id });
        } catch (_) {}
     }
-    db.updateWithdrawalStatus(st.id, 'reject');
+    db.updateWithdrawalStatus(st.id, 'reject', { rejectReason: 'admin_reject' });
     awaitingWdUpdate.delete(ctx.from.id);
     await ctx.reply(`Đã cập nhật ${st.id} → Từ chối (đã hoàn tiền).`, menuKeyboard(ctx));
     if (w.userId) {
       try {
         await bot.telegram.sendMessage(w.userId, `Yêu cầu rút tiền ${w.id} đã bị từ chối và hoàn tiền.`);
+      } catch (_) {}
+    }
+  });
+
+  bot.hears('Từ chối sai STK/Tên', async (ctx, next) => {
+    const st = awaitingWdUpdate.get(ctx.from.id);
+    if (!st || st.stage !== 'choose_status') return next();
+    const w = db.getWithdrawalById(st.id);
+    if (!w) return;
+    if (w.status !== 'reject') {
+      const u = db.getUser(w.userId);
+      const delta = Number(w.amount) || 0;
+      const after = u.balance + delta;
+      db.updateUser(w.userId, { balance: after });
+      try {
+        db.addUserBalanceHistory({ ts: Date.now(), userId: w.userId, delta, balanceAfter: after, reason: 'withdraw_refund_wrong_info', ref: w.id });
+      } catch (_) {}
+    }
+    db.updateWithdrawalStatus(st.id, 'reject', { rejectReason: 'wrong_info' });
+    awaitingWdUpdate.delete(ctx.from.id);
+    await ctx.reply(`Đã cập nhật ${st.id} → Từ chối (sai STK/Tên) (đã hoàn tiền).`, menuKeyboard(ctx));
+    if (w.userId) {
+      try {
+        await bot.telegram.sendMessage(w.userId, `Yêu cầu rút tiền ${w.id} bị từ chối do sai STK hoặc tên người nhận và đã hoàn tiền. Vui lòng tạo lại yêu cầu rút.`);
       } catch (_) {}
     }
   });
@@ -3034,7 +3103,7 @@ const ibftState = new Map();
               ? `Ngân hàng: ${w.bankName}\nSTK: ${w.bankAccount}\nChủ TK: ${w.bankHolder}\n`
               : `Network: ${w.network}\nVí: ${w.wallet}\n`) +
             `Số tiền: ${w.amount}\nTrạng thái hiện tại: ${w.status}\nChọn trạng thái mới:`,
-          Markup.keyboard([['Đã rút', 'Chưa rút', 'Từ chối'], ['❌ Hủy']]).resize()
+          Markup.keyboard([['Đã rút', 'Chưa rút'], ['Từ chối', 'Từ chối sai STK/Tên'], ['❌ Hủy']]).resize()
         );
         upd(id);
         return;
@@ -3091,9 +3160,10 @@ const ibftState = new Map();
       }
       if (wst.stage === 'amount') {
         const user = db.getUser(ctx.from.id);
+        const balanceBefore = Number(user.balance) || 0;
         let amount;
         if (text === 'Rút ALL') {
-          amount = Number(user.balance) || 0;
+          amount = balanceBefore;
         } else {
           amount = Number(text.replace(/[^\d]/g, ''));
         }
@@ -3104,8 +3174,8 @@ const ibftState = new Map();
         }
         
         // Cập nhật lại số dư mới nhất từ DB để tránh lỗi đồng bộ
-        if (amount > user.balance) {
-          await ctx.reply(`Số dư không đủ. Bạn chỉ có ${user.balance.toLocaleString()}đ. Nhập lại:`, Markup.keyboard([['Rút ALL'], ['❌ Hủy']]).resize());
+        if (amount > balanceBefore) {
+          await ctx.reply(`Số dư không đủ. Bạn chỉ có ${balanceBefore.toLocaleString()}đ. Nhập lại:`, Markup.keyboard([['Rút ALL'], ['❌ Hủy']]).resize());
           return;
         }
         
@@ -3118,9 +3188,10 @@ const ibftState = new Map();
         const actualReceive = Math.max(0, amount - feeFlat - feeByPercent);
 
         const id = `WD${Date.now().toString().slice(-10)}${Math.floor(100000 + Math.random() * 900000)}`;
-        db.updateUser(ctx.from.id, { balance: user.balance - amount });
+        const balanceAfter = balanceBefore - amount;
+        db.updateUser(ctx.from.id, { balance: balanceAfter });
         try {
-          db.addUserBalanceHistory({ ts: Date.now(), userId: ctx.from.id, delta: -amount, balanceAfter: user.balance - amount, reason: 'withdraw_create', ref: id });
+          db.addUserBalanceHistory({ ts: Date.now(), userId: ctx.from.id, delta: -amount, balanceAfter, reason: 'withdraw_create', ref: id });
         } catch (_) {}
 
         const rec = {
@@ -3136,7 +3207,10 @@ const ibftState = new Map();
           amount,
           feeFlat,
           feePercent,
+          feeByPercent,
           actualReceive,
+          balanceBefore,
+          balanceAfter,
           createdAt: Date.now(),
           status: 'pending',
         };
@@ -3164,7 +3238,7 @@ const ibftState = new Map();
               `🆕 Yêu cầu rút tiền mới\n\n` +
               `🆔 ID: ${id}\n` +
               `👤 User: ${userLabel}\n` +
-              `💰 Số dư user: ${Number(user.balance || 0).toLocaleString()}đ\n\n` +
+              `💰 Số dư user: ${balanceBefore.toLocaleString()}đ\n\n` +
               `🏦 Ngân hàng: ${rec.bankName}\n` +
               `💳 STK: ${rec.bankAccount}\n` +
               `👤 Chủ TK: ${rec.bankHolder}\n\n` +

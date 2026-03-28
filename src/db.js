@@ -192,11 +192,12 @@ function getWithdrawals({ status, limit } = {}) {
   return arr;
 }
 
-function updateWithdrawalStatus(id, status) {
+function updateWithdrawalStatus(id, status, extra) {
   const arr = loadWithdrawals();
   const idx = arr.findIndex((w) => w.id === id);
   if (idx < 0) return null;
-  arr[idx] = { ...arr[idx], status, updatedAt: Date.now() };
+  const patch = extra && typeof extra === 'object' ? extra : {};
+  arr[idx] = { ...arr[idx], status, updatedAt: Date.now(), ...patch };
   saveWithdrawals(arr);
   return arr[idx];
 }
