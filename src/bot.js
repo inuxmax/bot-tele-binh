@@ -592,34 +592,58 @@ app.get('/va/callback', async (req, res) => {
     const creditedStr = credited.toLocaleString();
     const feeFlatStr = feeFlat.toLocaleString();
 
-    if (rec.status !== 'paid' && rec.userId) {
-      const u = db.getUser(rec.userId);
-      const after = u.balance + credited;
-      db.updateUser(rec.userId, { balance: after });
-      try {
-        db.addUserBalanceHistory({ ts: Date.now(), userId: rec.userId, delta: credited, balanceAfter: after, reason: 'ipn', ref: clientRequestId });
-      } catch (_) {}
+    const paymentKey = String(transactionId || cashinId || '').trim();
+    let alreadyProcessed = false;
+    try {
+      const allPaid = db.loadAll().filter((r) => String(r.status) === 'paid');
+      if (paymentKey) {
+        alreadyProcessed = allPaid.some((r) => String(r.transactionId || '') === paymentKey || String(r.cashinId || '') === paymentKey);
+      } else {
+        const sig = `${String(vaAccount)}|${String(gross)}|${String(timePaid)}`;
+        alreadyProcessed = allPaid.some((r) => `${String(r.vaAccount)}|${toAmountNumber(r.amount)}|${String(r.timePaid || '')}` === sig);
+      }
+    } catch (_) {}
+
+    const baseRequestId = String(clientRequestId || '').trim();
+    const requestIdToStore =
+      String(rec.status || '').trim() === 'paid'
+        ? paymentKey
+          ? `${baseRequestId}:${paymentKey}`
+          : `${baseRequestId}:${Date.now()}`
+        : baseRequestId;
+
+    if (!alreadyProcessed) {
+      if (rec.userId) {
+        const u = db.getUser(rec.userId);
+        const after = u.balance + credited;
+        db.updateUser(rec.userId, { balance: after });
+        try {
+          db.addUserBalanceHistory({ ts: Date.now(), userId: rec.userId, delta: credited, balanceAfter: after, reason: 'ipn', ref: requestIdToStore });
+        } catch (_) {}
+      }
+      db.upsert({
+        ...rec,
+        requestId: requestIdToStore,
+        parentRequestId: baseRequestId || undefined,
+        status: 'paid',
+        vaAccount,
+        amount: String(gross),
+        netAmount: String(credited),
+        feeFlat,
+        vaBank: String(q.va_bank_name || ''),
+        orderId: String(q.order_id || ''),
+        transactionId,
+        cashinId,
+        timePaid: String(q.time_paid || ''),
+        transferContent: transferContent || rec.transferContent,
+        createdAt: Date.now(),
+      });
     }
-    db.upsert({
-      ...rec,
-      requestId: clientRequestId,
-      status: 'paid',
-      vaAccount,
-      amount: String(gross),
-      netAmount: String(credited),
-      feeFlat,
-      vaBank: String(q.va_bank_name || ''),
-      orderId: String(q.order_id || ''),
-      transactionId,
-      cashinId,
-      timePaid: String(q.time_paid || ''),
-      transferContent: transferContent || rec.transferContent,
-    });
 
     const targetUserId = rec.userId ? String(rec.userId) : '';
     const chatId = requestToChat.get(clientRequestId);
     const target = targetUserId || chatId;
-    if (target) {
+    if (target && !alreadyProcessed) {
       const owner = String(rec.name || rec.customerName || '').trim().toUpperCase();
       const content = transferContent || String(rec.remark || prev.remark || '').trim();
       try {
@@ -642,7 +666,7 @@ app.get('/va/callback', async (req, res) => {
       const smallLimit = 30000;
       const windowMs = 10 * 60 * 1000;
       const threshold = 10;
-      if (uid && gross > 0 && gross < smallLimit) {
+      if (uid && gross > 0 && gross < smallLimit && !alreadyProcessed) {
         const now = Date.now();
         const st = smallTxTracker.get(uid) || { times: [], lastNotify: 0 };
         const times = Array.isArray(st.times) ? st.times : [];
