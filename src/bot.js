@@ -59,7 +59,7 @@ function formatDateTimeVN(input) {
 function computeUserBalanceFromRecords(userId) {
   const uid = String(userId);
   const vas = db.loadAll().filter((r) => String(r.userId) === uid && String(r.status) === 'paid');
-  const totalPaid = vas.reduce((sum, r) => sum + toAmountNumber(r.netAmount || r.amount || r.vaAmount), 0);
+  const totalPaid = vas.reduce((sum, r) => sum + toAmountNumber(r.amount || r.vaAmount), 0);
   const wds = db.loadWithdrawals().filter((w) => String(w.userId) === uid && String(w.status) !== 'reject');
   const totalWithdraw = wds.reduce((sum, w) => sum + toAmountNumber(w.amount), 0);
   const balance = Math.max(0, totalPaid - totalWithdraw);
@@ -467,19 +467,10 @@ app.get('/va/callback', async (req, res) => {
     });
     const rec = db.getByRequestId(clientRequestId) || {};
     const gross = toAmountNumber(amount);
-    let credited = gross;
-    let feePercent = null;
-    let creditedStr = credited.toLocaleString();
+    const credited = gross;
+    const feePercent = null;
+    const creditedStr = credited.toLocaleString();
     let grossStr = gross.toLocaleString();
-    try {
-      if (rec.userId) {
-        const u = db.getUser(rec.userId);
-        const cfg = db.getConfig();
-        feePercent = u.feePercent !== null ? u.feePercent : cfg.globalFeePercent;
-        credited = Math.max(0, Math.floor(gross - (gross * Number(feePercent || 0)) / 100));
-        creditedStr = credited.toLocaleString();
-      }
-    } catch (_) {}
 
     if (rec.status !== 'paid' && rec.userId) {
       const u = db.getUser(rec.userId);
@@ -491,8 +482,8 @@ app.get('/va/callback', async (req, res) => {
       status: 'paid',
       vaAccount,
       amount: String(gross),
-      netAmount: String(credited),
-      feePercent,
+      netAmount: null,
+      feePercent: null,
       vaBank: String(q.va_bank_name || ''),
       orderId: String(q.order_id || ''),
       transactionId,
@@ -515,8 +506,7 @@ app.get('/va/callback', async (req, res) => {
         const txLine = transactionId ? ` • Transaction: ${escapeMd(transactionId)}` : '';
         const nameLine = owner ? ` • Họ Tên: ${escapeMd(owner)}` : '';
         const accLine = vaAccount ? ` • Số TK: ${escapeMd(vaAccount)}` : '';
-        const netLine =
-          feePercent !== null ? `✅ Thực nhận: +${creditedStr} đ (Đã trừ phí ${feePercent}%)` : `✅ Thực nhận: +${creditedStr} đ`;
+        const netLine = `✅ Thực nhận: +${creditedStr} đ`;
         const msgLines = [header, '', amountLine, netLine, '', bankLine, nameLine, accLine, timeLine, txLine].filter(Boolean);
         await bot.telegram.sendMessage(target, msgLines.join('\n'), { parse_mode: 'Markdown' });
       } catch (_) {}
@@ -710,13 +700,15 @@ if (!bot) {
           .slice(0, 60);
 
         const bankDisp = displayVaBank(decoded, bankCode);
+        const bankShort = String(decoded.vaBank || bankCode || '').trim().toUpperCase();
+        const bankSuffix = bankShort ? ` (${bankShort})` : '';
         const msg =
-          `*Tạo Virtual Account thành công*\n\n` +
-          `Ngân hàng: *${escapeMd(bankDisp)}*\n` +
-          `Tên tài khoản: *${escapeMd(acctName)}*\n` +
-          `Số tài khoản: *${escapeMd(decoded.vaAccount || '')}*\n` +
-          `Mã NV: *${escapeMd(staff)}*` +
-          (decoded.expiredTime ? `\nHết hạn: ${escapeMd(formatDateVN(decoded.expiredTime))}` : '');
+          `✅ *Tạo Virtual Account thành công*\n\n` +
+          `🏦 Ngân hàng: *${escapeMd(bankDisp)}${escapeMd(bankSuffix)}*\n` +
+          `👤 Tên tài khoản: *${escapeMd(acctName)}*\n` +
+          `💳 Số tài khoản: *${escapeMd(decoded.vaAccount || '')}*\n` +
+          `👨‍💼 Mã NV: *${escapeMd(staff)}*` +
+          (decoded.expiredTime ? `\n📅 Hết hạn: ${escapeMd(formatDateVN(decoded.expiredTime))}` : '');
         await ctx.reply(msg, { parse_mode: 'Markdown', ...(menuKeyboard(ctx) || {}) });
 
         const s = requestStatus.get(requestId) || baseStatus;
@@ -1218,7 +1210,7 @@ const ibftState = new Map();
     const msg = `ℹ️ THÔNG TIN TÀI KHOẢN\n\n` +
       `👤 ID: \`${user.id}\`\n` +
       `💰 Tổng số dư: ${user.balance.toLocaleString()}đ\n` +
-      `📉 Phí dịch vụ: ${feePercent}% (trừ khi tiền về)\n` +
+      `📉 Phí rút tiền: ${feePercent}%\n` +
       `📊 Tổng số VA đã tạo: ${user.createdVA}\n` +
       `🚫 Giới hạn tạo VA: ${user.vaLimit !== null ? user.vaLimit : 'Không giới hạn'}`;
       
@@ -1706,6 +1698,10 @@ const ibftState = new Map();
           return;
         }
         
+        const config = db.getConfig();
+        const feePercent = user.feePercent !== null ? user.feePercent : config.globalFeePercent;
+        const actualReceive = amount - (amount * feePercent / 100);
+
         db.updateUser(ctx.from.id, { balance: user.balance - amount });
 
         const id = `WD${Date.now().toString().slice(-10)}${Math.floor(100000 + Math.random() * 900000)}`;
@@ -1720,8 +1716,8 @@ const ibftState = new Map();
           network: wst.network,
           wallet: wst.wallet,
           amount,
-          feePercent: 0,
-          actualReceive: amount,
+          feePercent,
+          actualReceive,
           createdAt: Date.now(),
           status: 'pending',
         };
@@ -1732,7 +1728,7 @@ const ibftState = new Map();
           (rec.method === 'bank'
             ? `Ngân hàng: ${rec.bankName}\nSTK: ${rec.bankAccount}\nChủ TK: ${rec.bankHolder}\n`
             : `Network: ${rec.network}\nVí: ${rec.wallet}\n`) +
-          `Số dư bị trừ: ${amount.toLocaleString()}đ\nTrạng thái: pending`,
+          `Số dư bị trừ: ${amount.toLocaleString()}đ\nPhí rút: ${feePercent}%\nThực nhận: ${actualReceive.toLocaleString()}đ\nTrạng thái: pending`,
           menuKeyboard(ctx)
         );
         const adminRaw = process.env.ADMIN_IDS || '';
@@ -1745,7 +1741,7 @@ const ibftState = new Map();
               (rec.method === 'bank'
                 ? `Ngân hàng: ${rec.bankName}\nSTK: ${rec.bankAccount}\nChủ TK: ${rec.bankHolder}\n`
                 : `Network: ${rec.network}\nVí: ${rec.wallet}\n`) +
-              `Số tiền trừ: ${amount.toLocaleString()}đ`
+              `Số tiền trừ: ${amount.toLocaleString()}đ\nThực nhận: ${actualReceive.toLocaleString()}đ`
             );
           } catch (_) {}
         }
