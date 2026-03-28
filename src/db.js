@@ -7,6 +7,7 @@ const DATA_FILE = path.join(DATA_DIR, 'va_records.enc');
 const WD_FILE = path.join(DATA_DIR, 'withdrawals.enc');
 const USERS_FILE = path.join(DATA_DIR, 'users.enc');
 const CONFIG_FILE = path.join(DATA_DIR, 'config.enc');
+const BALANCE_HISTORY_FILE = path.join(DATA_DIR, 'balance_history.enc');
 const KEY_FILE = path.join(DATA_DIR, 'db.key');
 
 function deriveKey(secret) {
@@ -134,6 +135,7 @@ function ensureStore() {
   if (!fs.existsSync(WD_FILE)) writeEncryptedFile(WD_FILE, []);
   if (!fs.existsSync(USERS_FILE)) writeEncryptedFile(USERS_FILE, {});
   if (!fs.existsSync(CONFIG_FILE)) writeEncryptedFile(CONFIG_FILE, { globalFeePercent: 0 });
+  if (!fs.existsSync(BALANCE_HISTORY_FILE)) writeEncryptedFile(BALANCE_HISTORY_FILE, []);
 }
 
 ensureStore();
@@ -244,6 +246,36 @@ function updateConfig(data) {
   return getConfig();
 }
 
+function loadBalanceHistory() {
+  return readEncryptedFile(BALANCE_HISTORY_FILE, []);
+}
+
+function saveBalanceHistory(arr) {
+  writeEncryptedFile(BALANCE_HISTORY_FILE, arr);
+}
+
+function addBalanceHistory(entry) {
+  const arr = loadBalanceHistory();
+  const e = entry && typeof entry === 'object' ? entry : {};
+  arr.push({
+    ts: Number(e.ts) || Date.now(),
+    balance: Number(e.balance) || 0,
+    balanceRaw: e.balanceRaw ? String(e.balanceRaw) : '',
+    source: e.source ? String(e.source) : '',
+    adminId: e.adminId ? String(e.adminId) : '',
+  });
+  const max = 500;
+  if (arr.length > max) arr.splice(0, arr.length - max);
+  saveBalanceHistory(arr);
+  return arr[arr.length - 1];
+}
+
+function getBalanceHistory(limit = 50) {
+  const arr = loadBalanceHistory();
+  const n = Math.max(1, Math.min(200, Number(limit) || 50));
+  return arr.slice().sort((a, b) => (b.ts || 0) - (a.ts || 0)).slice(0, n);
+}
+
 function getVAsByUser(userId, limit = 10) {
   const arr = loadAll();
   const uid = String(userId);
@@ -262,6 +294,8 @@ module.exports = {
   getAllUsers,
   getConfig,
   updateConfig,
+  addBalanceHistory,
+  getBalanceHistory,
   getVAsByUser,
   // expose internal methods for migration script
   loadAll,

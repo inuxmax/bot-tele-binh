@@ -1250,6 +1250,9 @@ const ibftState = new Map();
       const balStr = String(decoded?.balance || '').trim();
       const balNum = toAmountNumber(balStr);
       db.updateUser(ctx.from.id, { balance: balNum });
+      try {
+        db.addBalanceHistory({ ts: Date.now(), balance: balNum, balanceRaw: balStr, source: 'MSB', adminId: ctx.from.id });
+      } catch (_) {}
       await ctx.reply(`Số Dư: ${balStr || balNum.toLocaleString()}`, menuKeyboard(ctx));
     } catch (e) {
       const msg = e.response?.data?.errorMessage || e.message;
@@ -1466,6 +1469,7 @@ const ibftState = new Map();
       `/setfee <id> <%> : Set % phí cho user\n` +
       `/setfee all <%> : Set % phí chung\n` +
       `/setipnfee <số> : Set phí giao dịch tiền về (VNĐ)\n` +
+      `/balhist [n] : Xem lịch sử số dư admin\n` +
       `/setlimit <id> <số> : Set giới hạn VA cho user\n` +
       `/users : Xem danh sách user\n` +
       `/admins : Xem danh sách admin`;
@@ -1545,6 +1549,23 @@ const ibftState = new Map();
     lines.push(`ADMIN_IDS: ${adminIds.length ? adminIds.join(', ') : '(trống)'}`);
     lines.push(`IBFT_ADMIN_IDS: ${ibftIds.length ? ibftIds.join(', ') : '(trống)'}`);
     await ctx.reply(lines.join('\n'), menuKeyboard(ctx));
+  });
+
+  bot.command('balhist', async (ctx) => {
+    if (!isAdminId(ctx.from.id)) return;
+    const parts = String(ctx.message?.text || '').trim().split(/\s+/);
+    const limit = Math.max(1, Math.min(50, Number(parts[1] || 20) || 20));
+    const items = db.getBalanceHistory(limit);
+    if (!items.length) {
+      await ctx.reply('Chưa có lịch sử số dư.', menuKeyboard(ctx));
+      return;
+    }
+    const lines = items.map((it) => {
+      const ts = formatDateTimeVN(it.ts);
+      const bal = Number(it.balance) || 0;
+      return `${ts} | ${bal.toLocaleString()}đ`;
+    });
+    await ctx.reply(`Lịch sử số dư (mới nhất):\n${lines.join('\n')}`, menuKeyboard(ctx));
   });
 
 
