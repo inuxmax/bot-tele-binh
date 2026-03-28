@@ -102,7 +102,13 @@ function readEncryptedFile(filePath, defaultData) {
       const decData = decryptWithKey(encData, key);
       if (!decData) continue;
       try {
-        return JSON.parse(decData);
+        const parsed = JSON.parse(decData);
+        if (key !== ENCRYPTION_KEY) {
+          try {
+            writeEncryptedFile(filePath, parsed);
+          } catch (_) {}
+        }
+        return parsed;
       } catch (_) {}
     }
     return defaultData;
@@ -229,7 +235,7 @@ function getAllUsers() {
 }
 
 function getConfig() {
-  return readEncryptedFile(CONFIG_FILE, { globalFeePercent: 0 });
+  return readEncryptedFile(CONFIG_FILE, { globalFeePercent: 0, ipnFeeFlat: 4000 });
 }
 
 function updateConfig(data) {

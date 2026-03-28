@@ -141,7 +141,7 @@ function formatDateTimeVN(input) {
 function computeUserBalanceFromRecords(userId) {
   const uid = String(userId);
   const vas = db.loadAll().filter((r) => String(r.userId) === uid && String(r.status) === 'paid');
-  const totalPaid = vas.reduce((sum, r) => sum + toAmountNumber(r.amount || r.vaAmount), 0);
+  const totalPaid = vas.reduce((sum, r) => sum + toAmountNumber(r.netAmount || r.amount || r.vaAmount), 0);
   const wds = db.loadWithdrawals().filter((w) => String(w.userId) === uid && String(w.status) !== 'reject');
   const totalWithdraw = wds.reduce((sum, w) => sum + toAmountNumber(w.amount), 0);
   const balance = Math.max(0, totalPaid - totalWithdraw);
@@ -565,10 +565,12 @@ app.get('/va/callback', async (req, res) => {
     });
     const rec = db.getByRequestId(clientRequestId) || {};
     const gross = toAmountNumber(amount);
-    const credited = gross;
-    const feePercent = null;
+    const cfg = db.getConfig();
+    const feeFlat = Math.max(0, Number(cfg.ipnFeeFlat || 0) || 0);
+    const credited = Math.max(0, gross - feeFlat);
     const creditedStr = credited.toLocaleString();
-    let grossStr = gross.toLocaleString();
+    const feeFlatStr = feeFlat.toLocaleString();
+    const grossStr = gross.toLocaleString();
 
     if (rec.status !== 'paid' && rec.userId) {
       const u = db.getUser(rec.userId);
@@ -580,8 +582,8 @@ app.get('/va/callback', async (req, res) => {
       status: 'paid',
       vaAccount,
       amount: String(gross),
-      netAmount: null,
-      feePercent: null,
+      netAmount: String(credited),
+      feeFlat,
       vaBank: String(q.va_bank_name || ''),
       orderId: String(q.order_id || ''),
       transactionId,
@@ -599,12 +601,13 @@ app.get('/va/callback', async (req, res) => {
       try {
         const header = `🔔 *TIỀN VỀ TIỀN VỀ*`;
         const amountLine = `💵 Số tiền: *${grossStr} đ*`;
+        const netLine = `✅ Thực nhận: +${creditedStr} đ (đã trừ ${feeFlatStr}đ phí giao dịch)`;
         const bankLine = bank ? `🏦 ${escapeMd(bank)}` : '';
         const timeLine = timePaid ? ` • Thời Gian: ${escapeMd(formatDateTimeVN(timePaid))}` : '';
         const txLine = transactionId ? ` • Transaction: ${escapeMd(transactionId)}` : '';
         const nameLine = owner ? ` • Họ Tên: ${escapeMd(owner)}` : '';
         const accLine = vaAccount ? ` • Số TK: ${escapeMd(vaAccount)}` : '';
-        const msgLines = [header, '', '', amountLine, '', bankLine, '', nameLine, accLine, timeLine, txLine].filter(Boolean);
+        const msgLines = [header, '', '', amountLine, netLine, '', bankLine, '', nameLine, accLine, timeLine, txLine].filter(Boolean);
         await bot.telegram.sendMessage(target, msgLines.join('\n'), { parse_mode: 'Markdown' });
       } catch (_) {}
       requestToChat.delete(clientRequestId);
@@ -1462,6 +1465,7 @@ const ibftState = new Map();
       `/deactive <id> : Hủy kích hoạt\n` +
       `/setfee <id> <%> : Set % phí cho user\n` +
       `/setfee all <%> : Set % phí chung\n` +
+      `/setipnfee <số> : Set phí giao dịch tiền về (VNĐ)\n` +
       `/setlimit <id> <số> : Set giới hạn VA cho user\n` +
       `/users : Xem danh sách user\n` +
       `/admins : Xem danh sách admin`;
@@ -1498,6 +1502,15 @@ const ibftState = new Map();
       db.updateUser(id, { feePercent: fee });
       await ctx.reply(`Đã set phí cho user ${id}: ${fee}%`);
     }
+  });
+
+  bot.command('setipnfee', async (ctx) => {
+    if (!isAdminId(ctx.from.id)) return;
+    const parts = ctx.message.text.split(' ');
+    const fee = Number(String(parts[1] || '').replace(/[^\d]/g, ''));
+    if (!Number.isFinite(fee) || fee < 0) return ctx.reply('Cú pháp: /setipnfee <số>');
+    db.updateConfig({ ipnFeeFlat: fee });
+    await ctx.reply(`Đã set phí giao dịch tiền về: ${fee.toLocaleString()}đ`);
   });
 
   bot.command('setlimit', async (ctx) => {
@@ -1956,7 +1969,7 @@ const ibftState = new Map();
     }
     const wst = withdrawState.get(ctx.from.id);
     if (wst) {
-      if (isMenuText(text)) return next();
+      if (isMenuText(text) && !(wst.stage === 'amount' && text === 'Rút ALL')) return next();
       if (wst.stage === 'choose_saved' || wst.stage === 'delete_saved') {
         await ctx.reply('Vui lòng chọn bằng các nút bên dưới tin nhắn.', menuKeyboard(ctx));
         return;
@@ -2004,9 +2017,10 @@ const ibftState = new Map();
         return;
       }
       if (wst.stage === 'amount') {
+        const user = db.getUser(ctx.from.id);
         let amount;
         if (text === 'Rút ALL') {
-          amount = wst.balance;
+          amount = Number(user.balance) || 0;
         } else {
           amount = Number(text.replace(/[^\d]/g, ''));
         }
@@ -2017,7 +2031,6 @@ const ibftState = new Map();
         }
         
         // Cập nhật lại số dư mới nhất từ DB để tránh lỗi đồng bộ
-        const user = db.getUser(ctx.from.id);
         if (amount > user.balance) {
           await ctx.reply(`Số dư không đủ. Bạn chỉ có ${user.balance.toLocaleString()}đ. Nhập lại:`, Markup.keyboard([['Rút ALL'], ['❌ Hủy']]).resize());
           return;
