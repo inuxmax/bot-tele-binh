@@ -2031,17 +2031,21 @@ const ibftState = new Map();
   function classifyIbft(it) {
     const ok = !it.errorCode && !it.errorMessage;
     if (ok) return 'success';
-    const t = normalizeKeyText(`${it.errorMessage || ''} ${it.errorCode || ''}`);
-    if (t.includes('ten') || t.includes('name') || t.includes('account name') || t.includes('chu tk') || t.includes('chu tai khoan')) return 'name_error';
-    if (t.includes('stk') || t.includes('so tai khoan') || t.includes('account') || t.includes('account number')) return 'account_error';
     return 'other_error';
   }
 
+  function startOfVnDayTs(nowTs) {
+    const offsetMs = 7 * 60 * 60 * 1000;
+    const d = new Date((Number(nowTs) || Date.now()) + offsetMs);
+    const y = d.getUTCFullYear();
+    const m = d.getUTCMonth();
+    const day = d.getUTCDate();
+    return Date.UTC(y, m, day) - offsetMs;
+  }
+
   function rangeToTs(rangeKey) {
-    const now = new Date();
-    const vn = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Ho_Chi_Minh' }));
     const end = Date.now();
-    const startOfDay = new Date(vn.getFullYear(), vn.getMonth(), vn.getDate()).getTime();
+    const startOfDay = startOfVnDayTs(end);
     if (rangeKey === 'today') return { fromTs: startOfDay, toTs: end };
     if (rangeKey === '7d') return { fromTs: startOfDay - 6 * 24 * 60 * 60 * 1000, toTs: end };
     return { fromTs: 0, toTs: end };
@@ -2062,7 +2066,7 @@ const ibftState = new Map();
   function fmtIbftItem(it) {
     const ts = formatDateTimeVN(it.ts);
     const cls = classifyIbft(it);
-    const icon = cls === 'success' ? '✅' : cls === 'name_error' ? '❌👤' : cls === 'account_error' ? '❌💳' : '❌';
+    const icon = cls === 'success' ? '✅' : '❌';
     const amt = Number(it.amount) || 0;
     const bank = escapeMd(String(it.bankCode || '').trim().toUpperCase());
     const acc = escapeMd(maskAccountNumber(it.accountNumber));
@@ -2085,7 +2089,7 @@ const ibftState = new Map();
 
   function formatIbftHistoryPage(allItems, typeKey, rangeKey, page) {
     const filtered = filterIbft(allItems, typeKey, rangeKey);
-    const counts = { success: 0, name_error: 0, account_error: 0, other_error: 0 };
+    const counts = { success: 0, other_error: 0 };
     for (const it of filterIbft(allItems, 'all', rangeKey)) counts[classifyIbft(it)]++;
     const pageSize = 10;
     const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
@@ -2095,19 +2099,15 @@ const ibftState = new Map();
     const typeLabel =
       typeKey === 'success'
         ? '✅ Thành công'
-        : typeKey === 'name_error'
-          ? '❌ Lỗi tên'
-          : typeKey === 'account_error'
-            ? '❌ Lỗi STK'
-            : typeKey === 'other_error'
-              ? '❌ Lỗi khác'
-              : '📦 Tất cả';
+        : typeKey === 'other_error'
+          ? '❌ Lỗi'
+          : '📦 Tất cả';
     const rangeLabel = rangeKey === 'today' ? 'Hôm nay' : rangeKey === '7d' ? '7 ngày' : 'All';
 
     const out = [];
     out.push(`📜 *LỊCH SỬ CHI HỘ* (${p}/${pageCount})`);
     out.push(`📌 Loại: *${typeLabel}* | 📅 ${rangeLabel}`);
-    out.push(`✅ ${counts.success} | ❌👤 ${counts.name_error} | ❌💳 ${counts.account_error} | ❌ ${counts.other_error}`);
+    out.push(`✅ ${counts.success} | ❌ ${counts.other_error}`);
     out.push('');
     if (!slice.length) {
       out.push('Không có dữ liệu.');
@@ -2158,10 +2158,9 @@ const ibftState = new Map();
     const rows = [
       [
         Markup.button.callback('✅ Thành công', 'ibft_hist_type:success'),
-        Markup.button.callback('❌ Lỗi tên', 'ibft_hist_type:name_error'),
-        Markup.button.callback('❌ Lỗi STK', 'ibft_hist_type:account_error'),
+        Markup.button.callback('❌ Lỗi', 'ibft_hist_type:other_error'),
+        Markup.button.callback('📦 Tất cả', 'ibft_hist_type:all'),
       ],
-      [Markup.button.callback('❌ Lỗi khác', 'ibft_hist_type:other_error'), Markup.button.callback('📦 Tất cả', 'ibft_hist_type:all')],
       [Markup.button.callback('📅 Hôm nay', 'ibft_hist_range:today'), Markup.button.callback('📅 7 ngày', 'ibft_hist_range:7d'), Markup.button.callback('📅 All', 'ibft_hist_range:all')],
     ];
     if (nav.length) rows.push(nav);
@@ -2198,10 +2197,9 @@ const ibftState = new Map();
     const rows = [
       [
         Markup.button.callback('✅ Thành công', 'ibft_hist_type:success'),
-        Markup.button.callback('❌ Lỗi tên', 'ibft_hist_type:name_error'),
-        Markup.button.callback('❌ Lỗi STK', 'ibft_hist_type:account_error'),
+        Markup.button.callback('❌ Lỗi', 'ibft_hist_type:other_error'),
+        Markup.button.callback('📦 Tất cả', 'ibft_hist_type:all'),
       ],
-      [Markup.button.callback('❌ Lỗi khác', 'ibft_hist_type:other_error'), Markup.button.callback('📦 Tất cả', 'ibft_hist_type:all')],
       [Markup.button.callback('📅 Hôm nay', 'ibft_hist_range:today'), Markup.button.callback('📅 7 ngày', 'ibft_hist_range:7d'), Markup.button.callback('📅 All', 'ibft_hist_range:all')],
     ];
     if (nav.length) rows.push(nav);
@@ -2221,7 +2219,7 @@ const ibftState = new Map();
     await updateIbftHistMessage(ctx, { ...st, page: Number(ctx.match[1] || 1) });
   });
 
-  bot.action(/^ibft_hist_type:(all|success|name_error|account_error|other_error)$/, async (ctx) => {
+  bot.action(/^ibft_hist_type:(all|success|other_error)$/, async (ctx) => {
     try {
       await ctx.answerCbQuery();
     } catch (_) {}
@@ -2313,7 +2311,7 @@ const ibftState = new Map();
     const parts = String(ctx.message?.text || '').trim().split(/\s+/);
     const arg1 = String(parts[1] || '').trim().toLowerCase();
     if (!arg1) {
-      await ctx.reply('Cú pháp: /ibftexport all | /ibftexport <from YYYY-MM-DD> <to YYYY-MM-DD> [all|success|name_error|account_error|other_error]', menuKeyboard(ctx));
+      await ctx.reply('Cú pháp: /ibftexport all | /ibftexport <from YYYY-MM-DD> <to YYYY-MM-DD> [all|success|other_error]', menuKeyboard(ctx));
       return;
     }
     if (arg1 === 'all') {
@@ -2515,6 +2513,7 @@ const ibftState = new Map();
       lines.push(`*${escapeMd(title)}*`);
       lines.push(`🆔 ID: *${escapeMd(String(w.id || ''))}*`);
       lines.push(`👤 User: ${escapeMd(userLabel)}`);
+      if (w.userId) lines.push(`🆔 User ID: ${escapeMd(String(w.userId))}`);
       lines.push(`💰 Số dư user: ${bal.toLocaleString()}đ`);
       lines.push('');
 
@@ -3255,6 +3254,7 @@ const ibftState = new Map();
               `🆕 Yêu cầu rút tiền mới\n\n` +
               `🆔 ID: ${id}\n` +
               `👤 User: ${userLabel}\n` +
+              `🆔 User ID: ${ctx.from.id}\n` +
               `💰 Số dư user: ${balanceBefore.toLocaleString()}đ\n\n` +
               `🏦 Ngân hàng: ${rec.bankName}\n` +
               `💳 STK: ${rec.bankAccount}\n` +
