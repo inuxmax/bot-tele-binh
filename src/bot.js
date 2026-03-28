@@ -2499,6 +2499,107 @@ const ibftState = new Map();
       for (const w of reject) lines.push(fmt(w), '');
     }
     await ctx.replyWithMarkdown(lines.join('\n').trim(), menuKeyboard(ctx));
+    await ctx.reply('📤 Xuất danh sách rút tiền:', {
+      reply_markup: Markup.inlineKeyboard([
+        [
+          Markup.button.callback('⏳ Pending', 'wd_export:pending'),
+          Markup.button.callback('✅ Done', 'wd_export:done'),
+          Markup.button.callback('❌ Reject', 'wd_export:reject'),
+        ],
+        [Markup.button.callback('📦 Xuất ALL', 'wd_export:all')],
+      ]).reply_markup,
+    });
+  });
+
+  async function exportWithdrawalsCsv(ctx, statusKey, fromTs, toTs) {
+    const status = String(statusKey || 'all').trim().toLowerCase();
+    const all = db.getWithdrawals({});
+    const filtered = all.filter((w) => {
+      const st = String(w.status || '').trim().toLowerCase();
+      if (status !== 'all' && st !== status) return false;
+      const ts = Number(w.createdAt || w.updatedAt || 0) || 0;
+      if (fromTs && ts < fromTs) return false;
+      if (toTs && ts > toTs) return false;
+      return true;
+    });
+    const headers = [
+      'id',
+      'status',
+      'createdAt',
+      'createdAt_vn',
+      'updatedAt',
+      'updatedAt_vn',
+      'userId',
+      'username',
+      'method',
+      'bankName',
+      'bankAccount',
+      'bankHolder',
+      'network',
+      'wallet',
+      'amount',
+      'feeFlat',
+      'feePercent',
+      'actualReceive',
+    ];
+    const rows = filtered.map((w) => [
+      String(w.id || ''),
+      String(w.status || ''),
+      String(Number(w.createdAt || 0) || 0),
+      formatDateTimeVN(w.createdAt || ''),
+      String(Number(w.updatedAt || 0) || 0),
+      formatDateTimeVN(w.updatedAt || ''),
+      String(w.userId || ''),
+      String(w.username || ''),
+      String(w.method || ''),
+      String(w.bankName || ''),
+      String(w.bankAccount || ''),
+      String(w.bankHolder || ''),
+      String(w.network || ''),
+      String(w.wallet || ''),
+      String(Number(w.amount) || 0),
+      String(Number(w.feeFlat) || 0),
+      w.feePercent === null || w.feePercent === undefined ? '' : String(Number(w.feePercent) || 0),
+      String(Number(w.actualReceive) || 0),
+    ]);
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+    const namePart = `${status}_${fromTs ? 'range' : 'all'}`.replace(/[^\w.-]/g, '_');
+    const filename = `withdrawals_${namePart}_${stamp}.csv`;
+    const filePath = writeCsvFile(filename, headers, rows);
+    await bot.telegram.sendDocument(ctx.chat.id, { source: fs.createReadStream(filePath), filename }, { caption: `Xuất rút tiền (${status}): ${rows.length} dòng` });
+    try {
+      fs.unlinkSync(filePath);
+    } catch (_) {}
+  }
+
+  bot.action(/^wd_export:(pending|done|reject|all)$/, async (ctx) => {
+    try {
+      await ctx.answerCbQuery();
+    } catch (_) {}
+    if (!isAdminId(ctx.from.id)) return;
+    try {
+      await exportWithdrawalsCsv(ctx, String(ctx.match[1] || 'all'), 0, 0);
+    } catch (e) {
+      await ctx.reply(`Lỗi xuất excel rút tiền: ${e.message}`, menuKeyboard(ctx));
+    }
+  });
+
+  bot.command('wdexport', async (ctx) => {
+    if (!isAdminId(ctx.from.id)) return;
+    const parts = String(ctx.message?.text || '').trim().split(/\s+/);
+    const status = String(parts[1] || 'all').trim().toLowerCase();
+    const fromTs = parseDateYmdToTs(parts[2]);
+    const toStart = parseDateYmdToTs(parts[3]);
+    if (parts[2] && (!fromTs || !toStart)) {
+      await ctx.reply('Cú pháp: /wdexport [all|pending|done|reject] [from YYYY-MM-DD] [to YYYY-MM-DD]', menuKeyboard(ctx));
+      return;
+    }
+    const toTs = toStart ? toStart + 24 * 60 * 60 * 1000 - 1 : 0;
+    try {
+      await exportWithdrawalsCsv(ctx, status, fromTs || 0, toTs || 0);
+    } catch (e) {
+      await ctx.reply(`Lỗi xuất excel rút tiền: ${e.message}`, menuKeyboard(ctx));
+    }
   });
 
   const awaitingWdUpdate = new Map();
