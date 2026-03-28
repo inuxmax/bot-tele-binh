@@ -229,7 +229,7 @@ function buildSepayQrUrl({ acc, bank, amount, des, template }) {
     params.set('amount', String(Number(amount)));
   }
   if (des) params.set('des', String(des).trim());
-  params.set('template', template || 'compact');
+  params.set('template', template || 'qronly');
   return `${base}?${params.toString()}`;
 }
 
