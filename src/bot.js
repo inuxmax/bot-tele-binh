@@ -403,6 +403,9 @@ if (!bot) {
       const chatType = ctx?.chat?.type;
       if (!chatId || chatType !== 'private') return;
       const isAdmin = !!ctx?.from?.id && isAdminId(ctx.from.id);
+      try {
+        await bot.telegram.deleteMyCommands({ scope: { type: 'chat', chat_id: chatId } });
+      } catch (_) {}
       await bot.telegram.setMyCommands(isAdmin ? ADMIN_BOT_COMMANDS : USER_BOT_COMMANDS, {
         scope: { type: 'chat', chat_id: chatId },
       });
@@ -411,7 +414,13 @@ if (!bot) {
 
   (async () => {
     try {
+      try {
+        await bot.telegram.deleteMyCommands({ scope: { type: 'default' } });
+      } catch (_) {}
       await bot.telegram.setMyCommands(USER_BOT_COMMANDS, { scope: { type: 'default' } });
+      try {
+        await bot.telegram.deleteMyCommands({ scope: { type: 'all_private_chats' } });
+      } catch (_) {}
       await bot.telegram.setMyCommands(USER_BOT_COMMANDS, { scope: { type: 'all_private_chats' } });
       try {
         const adminIds = String(process.env.ADMIN_IDS || '')
@@ -421,6 +430,9 @@ if (!bot) {
         for (const id of adminIds) {
           const chatId = Number(id);
           if (!Number.isFinite(chatId)) continue;
+          try {
+            await bot.telegram.deleteMyCommands({ scope: { type: 'chat', chat_id: chatId } });
+          } catch (_) {}
           await bot.telegram.setMyCommands(ADMIN_BOT_COMMANDS, { scope: { type: 'chat', chat_id: chatId } });
         }
       } catch (_) {}
@@ -832,14 +844,7 @@ const ibftState = new Map();
   bot.command('menu', async (ctx) => {
     awaitingName.delete(ctx.from.id);
     await syncCommandMenuForChat(ctx);
-    const guideMsg =
-      `📌 HƯỚNG DẪN LẤY BANK (Cách sử dụng)\n\n` +
-      `1️⃣ Nhấn "🎲 Random tên" để lấy nhanh một VA ngẫu nhiên.\n` +
-      `2️⃣ Nhấn "✍️ Nhập tên" để tạo VA theo tên khách hàng mong muốn.\n` +
-      `3️⃣ Nhấn "🔎 Kiểm tra tài khoản" để kiểm tra giao dịch của VA.\n` +
-      `4️⃣ Nhấn "💸 Rút tiền" để yêu cầu rút số dư khả dụng.\n\n` +
-      `Chào bạn! Vui lòng chọn thao tác bên dưới:`;
-    await ctx.reply(guideMsg, menuKeyboard(ctx));
+    await ctx.reply('Menu:', menuKeyboard(ctx));
   });
 
   const { getAccessToken } = require('./hpayAuth');
