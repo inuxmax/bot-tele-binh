@@ -440,10 +440,14 @@ app.get('/va/callback', async (req, res) => {
   const clientRequestId = String(q.client_request_id || '');
   const merchantId = String(q.merchant_id || '');
   const secureCode = String(q.secure_code || '').toLowerCase();
+  const msbMerchant = String(process.env.HPAY_MERCHANT_ID_MSB || '').trim();
+  const klbMerchant = String(process.env.HPAY_MERCHANT_ID_KLB || '').trim();
+  const msbMid = String(process.env.HPAY_X_API_MID_MSB || '').trim();
+  const klbMid = String(process.env.HPAY_X_API_MID_KLB || '').trim();
   const passcode =
-    (merchantId && merchantId === String(process.env.HPAY_MERCHANT_ID_MSB || '').trim()
+    (merchantId && (merchantId === msbMerchant || merchantId === msbMid)
       ? String(process.env.HPAY_PASSCODE_MSB || '').trim()
-      : merchantId && merchantId === String(process.env.HPAY_MERCHANT_ID_KLB || '').trim()
+      : merchantId && (merchantId === klbMerchant || merchantId === klbMid)
         ? String(process.env.HPAY_PASSCODE_KLB || '').trim()
         : String(process.env.HPAY_PASSCODE || '').trim()) || '';
 
@@ -456,6 +460,18 @@ app.get('/va/callback', async (req, res) => {
     const t = String(q.transfer_content || '');
     if (t) transferContent = Buffer.from(t, 'base64').toString('utf8');
   } catch (_) {}
+
+  if (bot && !ok && clientRequestId) {
+    try {
+      const adminId = String(process.env.ADMIN_IDS || '').split(',').map((s) => s.trim()).filter(Boolean)[0];
+      if (adminId) {
+        await bot.telegram.sendMessage(
+          adminId,
+          `IPN lỗi secure_code\nRequestId: ${clientRequestId}\nVA: ${vaAccount}\nAmount: ${amount}\nmerchant_id: ${merchantId}\nsecure_code: ${secureCode}`
+        );
+      }
+    } catch (_) {}
+  }
 
   if (bot && ok) {
     const timePaid = String(q.time_paid || '');
@@ -501,9 +517,9 @@ app.get('/va/callback', async (req, res) => {
       transferContent: transferContent || rec.transferContent,
     });
 
-    const targetUserId = rec.userId ? Number(rec.userId) : null;
+    const targetUserId = rec.userId ? String(rec.userId) : '';
     const chatId = requestToChat.get(clientRequestId);
-    const target = Number.isFinite(targetUserId) ? targetUserId : chatId;
+    const target = targetUserId || chatId;
     if (target) {
       const owner = String(rec.name || rec.customerName || '').trim().toUpperCase();
       const content = transferContent || String(rec.remark || prev.remark || '').trim();
@@ -1426,9 +1442,54 @@ const ibftState = new Map();
     return lines.join('\n');
   }
 
+  function findLatestByVaAccount(vaAccount) {
+    const acc = String(vaAccount || '').replace(/[^\d]/g, '');
+    if (!acc) return null;
+    const candidates = [];
+    try {
+      for (const [rid, s] of requestStatus.entries()) {
+        if (String(s?.vaAccount || '') === acc) candidates.push({ requestId: rid, ...s });
+      }
+    } catch (_) {}
+    try {
+      const all = db.loadAll();
+      for (const r of all) {
+        if (String(r?.vaAccount || '') === acc) candidates.push(r);
+      }
+    } catch (_) {}
+    if (!candidates.length) return null;
+    candidates.sort((a, b) => {
+      const ap = String(a.status || '') === 'paid' ? 1 : 0;
+      const bp = String(b.status || '') === 'paid' ? 1 : 0;
+      if (ap !== bp) return bp - ap;
+      return (Number(b.timePaid || b.createdAt || 0) || 0) - (Number(a.timePaid || a.createdAt || 0) || 0);
+    });
+    return candidates[0];
+  }
+
+  function formatStatusByVaAccount(vaAccount) {
+    const acc = String(vaAccount || '').replace(/[^\d]/g, '');
+    const s = findLatestByVaAccount(acc);
+    if (!s) return 'Không tìm thấy VA này.';
+    const lines = [];
+    if (s.requestId) lines.push(`RequestId: ${s.requestId}`);
+    lines.push(`STK: ${acc}`);
+    if (s.status) lines.push(`Trạng thái: ${s.status}`);
+    if (s.amount) lines.push(`Số tiền: ${s.amount}`);
+    if (s.vaAmount && !s.amount) lines.push(`Số tiền: ${s.vaAmount}`);
+    if (s.vaBank) lines.push(`Ngân hàng: ${s.vaBank}`);
+    if (s.name) lines.push(`Tên: ${s.name}`);
+    if (s.customerName) lines.push(`KH: ${s.customerName}`);
+    if (s.remark) lines.push(`Remark: ${s.remark}`);
+    if (s.transactionId) lines.push(`Transaction: ${s.transactionId}`);
+    if (s.cashinId) lines.push(`CASHIN: ${s.cashinId}`);
+    if (s.timePaid) lines.push(`TimePaid: ${s.timePaid}`);
+    return lines.join('\n');
+  }
+
   bot.hears('🔎 Kiểm tra tài khoản', async (ctx) => {
     awaitingStatus.set(ctx.from.id, true);
-    await ctx.reply('Nhập ClientRequestId để kiểm tra:');
+    await ctx.reply('Nhập Số tài khoản (vaAccount) để kiểm tra:');
   });
 
   bot.on('text', async (ctx, next) => {
@@ -1794,12 +1855,12 @@ const ibftState = new Map();
         return next();
       }
       awaitingStatus.delete(ctx.from.id);
-      const id = text.trim();
-      if (!id) {
-        await ctx.reply('clientRequestId trống.', menuKeyboard(ctx));
+      const acc = String(text || '').replace(/[^\d]/g, '');
+      if (!acc) {
+        await ctx.reply('Số tài khoản (vaAccount) trống.', menuKeyboard(ctx));
         return;
       }
-      await ctx.reply(formatStatus(id), menuKeyboard(ctx));
+      await ctx.reply(formatStatusByVaAccount(acc), menuKeyboard(ctx));
       return;
     }
     return next();
