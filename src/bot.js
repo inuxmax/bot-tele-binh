@@ -1861,20 +1861,37 @@ const ibftState = new Map();
     const acc = String(vaAccount || '').replace(/[^\d]/g, '');
     const s = findLatestByVaAccount(acc);
     if (!s) return 'Không tìm thấy VA này.';
-    const lines = [];
-    if (s.requestId) lines.push(`RequestId: ${s.requestId}`);
-    lines.push(`STK: ${acc}`);
-    if (s.status) lines.push(`Trạng thái: ${s.status}`);
-    if (s.amount) lines.push(`Số tiền: ${s.amount}`);
-    if (s.vaAmount && !s.amount) lines.push(`Số tiền: ${s.vaAmount}`);
-    if (s.vaBank) lines.push(`Ngân hàng: ${s.vaBank}`);
-    if (s.name) lines.push(`Tên: ${s.name}`);
-    if (s.customerName) lines.push(`KH: ${s.customerName}`);
-    if (s.remark) lines.push(`Remark: ${s.remark}`);
-    if (s.transactionId) lines.push(`Transaction: ${s.transactionId}`);
-    if (s.cashinId) lines.push(`CASHIN: ${s.cashinId}`);
-    if (s.timePaid) lines.push(`TimePaid: ${s.timePaid}`);
-    return lines.join('\n');
+    const statusRaw = String(s.status || '').trim();
+    const statusKey = statusRaw.toLowerCase();
+    const statusLabel =
+      statusKey === 'paid' ? '✅ PAID' : statusKey === 'unpaid' ? '⏳ UNPAID' : statusRaw ? statusRaw.toUpperCase() : 'N/A';
+
+    const amountValue = s.amount || s.vaAmount || '';
+    const amountNum = toAmountNumber(amountValue);
+    const amountStr = amountNum ? `${amountNum.toLocaleString()} đ` : escapeMd(String(amountValue || '0'));
+
+    const bankStr = String(s.vaBank || s.bank || '').trim();
+    const nameStr = String(s.name || s.customerName || '').trim();
+    const remarkStr = String(s.transferContent || s.remark || '').trim();
+    const timeStr = s.timePaid ? formatDateTimeVN(s.timePaid) : '';
+    const txStr = String(s.transactionId || '').trim();
+    const cashinStr = String(s.cashinId || '').trim();
+    const reqIdStr = String(s.requestId || '').trim();
+
+    const out = [];
+    out.push('*🔎 KẾT QUẢ KIỂM TRA*');
+    out.push('');
+    out.push(`💳 STK: \`${escapeMd(acc)}\``);
+    if (reqIdStr) out.push(`🆔 RequestId: \`${escapeMd(reqIdStr)}\``);
+    out.push(`📌 Trạng thái: *${escapeMd(statusLabel)}*`);
+    out.push(`💵 Số tiền: *${escapeMd(amountStr)}*`);
+    if (bankStr) out.push(`🏦 Ngân hàng: *${escapeMd(bankStr)}*`);
+    if (nameStr) out.push(`👤 Tên: *${escapeMd(nameStr)}*`);
+    if (remarkStr) out.push(`📝 Nội dung: ${escapeMd(remarkStr)}`);
+    if (timeStr) out.push(`🕒 Thời gian: ${escapeMd(timeStr)}`);
+    if (txStr) out.push(`🔁 Transaction: ${escapeMd(txStr)}`);
+    if (cashinStr) out.push(`🧾 CASHIN: ${escapeMd(cashinStr)}`);
+    return out.join('\n');
   }
 
   bot.hears('🔎 Kiểm tra tài khoản', async (ctx) => {
@@ -2298,7 +2315,7 @@ const ibftState = new Map();
         await ctx.reply('Số tài khoản (vaAccount) trống.', menuKeyboard(ctx));
         return;
       }
-      await ctx.reply(formatStatusByVaAccount(acc), menuKeyboard(ctx));
+      await ctx.replyWithMarkdown(formatStatusByVaAccount(acc), menuKeyboard(ctx));
       return;
     }
     return next();
