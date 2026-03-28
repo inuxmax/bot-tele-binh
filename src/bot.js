@@ -1247,7 +1247,7 @@ const ibftState = new Map();
       const balStr = String(decoded?.balance || '').trim();
       const balNum = toAmountNumber(balStr);
       db.updateUser(ctx.from.id, { balance: balNum });
-      await ctx.reply(`MSB: ${balStr || balNum.toLocaleString()}`, menuKeyboard(ctx));
+      await ctx.reply(`Số Dư: ${balStr || balNum.toLocaleString()}`, menuKeyboard(ctx));
     } catch (e) {
       const msg = e.response?.data?.errorMessage || e.message;
       await ctx.reply(`Lỗi lấy số dư: ${msg}`, menuKeyboard(ctx));
