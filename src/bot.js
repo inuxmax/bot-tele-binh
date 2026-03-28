@@ -150,6 +150,76 @@ function displayVaBank(decoded, bankCode) {
   return VA_BANK_DISPLAY[code] || code;
 }
 
+async function sendQrImage(ctx, buf) {
+  if (!buf || !buf.length) return false;
+  try {
+    await ctx.replyWithPhoto({ source: buf }, menuKeyboard(ctx));
+    return true;
+  } catch (_) {
+    try {
+      await ctx.replyWithDocument({ source: buf, filename: 'qr.png' }, menuKeyboard(ctx));
+      return true;
+    } catch (_) {}
+  }
+  return false;
+}
+
+function sniffImageBuffer(buf) {
+  if (!buf || buf.length < 4) return false;
+  if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) return true;
+  if (buf[0] === 0xff && buf[1] === 0xd8) return true;
+  if (buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x38) return true;
+  if (buf[0] === 0x52 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x46) return true;
+  return false;
+}
+
+async function sendQrFromRaw(ctx, qrRaw) {
+  const raw = String(qrRaw || '').trim();
+  if (!raw) return false;
+  const lower = raw.toLowerCase();
+  if (lower.startsWith('data:image/')) {
+    const b64 = raw.split(',')[1] || '';
+    const buf = Buffer.from(b64, 'base64');
+    return sendQrImage(ctx, buf);
+  }
+  if (lower.startsWith('http://') || lower.startsWith('https://')) {
+    const res = await axios.get(raw, {
+      responseType: 'arraybuffer',
+      timeout: 20000,
+      maxContentLength: 12 * 1024 * 1024,
+      maxRedirects: 5,
+      headers: { 'User-Agent': 'bot-tele-binh' },
+      validateStatus: (s) => s >= 200 && s < 400,
+    });
+    const ct = String(res.headers?.['content-type'] || '').toLowerCase();
+    const buf = Buffer.from(res.data || []);
+    if (buf.length && (ct.startsWith('image/') || sniffImageBuffer(buf))) {
+      return sendQrImage(ctx, buf);
+    }
+    const text = buf.toString('utf8');
+    const mData = text.match(/data:image\/[a-z0-9.+-]+;base64,([a-z0-9+/=]+)/i);
+    if (mData && mData[1]) {
+      const b = Buffer.from(mData[1], 'base64');
+      return sendQrImage(ctx, b);
+    }
+    const mSrc = text.match(/<img[^>]+src=["']([^"']+)["']/i);
+    if (mSrc && mSrc[1]) {
+      const src = mSrc[1].trim();
+      if (src.toLowerCase().startsWith('data:image/')) return sendQrFromRaw(ctx, src);
+      if (src.toLowerCase().startsWith('http://') || src.toLowerCase().startsWith('https://')) return sendQrFromRaw(ctx, src);
+      if (src.startsWith('/')) {
+        try {
+          const u = new URL(raw);
+          return sendQrFromRaw(ctx, `${u.protocol}//${u.host}${src}`);
+        } catch (_) {}
+      }
+    }
+    return false;
+  }
+  const buf = Buffer.from(raw, 'base64');
+  return sendQrImage(ctx, buf);
+}
+
 function menuKeyboard(ctx) {
   if (!bot) return null;
   const isAdmin = ctx && ctx.from && isAdminId(ctx.from.id);
@@ -431,24 +501,8 @@ if (!bot) {
         try {
           const qrRaw = String(decoded.qrCode || decoded.quickLink || '').trim();
           if (qrRaw) {
-            const lower = qrRaw.toLowerCase();
-            if (lower.startsWith('data:image/')) {
-              const b64 = qrRaw.split(',')[1] || '';
-              const buf = Buffer.from(b64, 'base64');
-              if (buf.length) await ctx.replyWithPhoto({ source: buf }, menuKeyboard(ctx));
-            } else if (lower.startsWith('http://') || lower.startsWith('https://')) {
-              const res = await axios.get(qrRaw, { responseType: 'arraybuffer', timeout: 15000, maxContentLength: 8 * 1024 * 1024 });
-              const ct = String(res.headers?.['content-type'] || '').toLowerCase();
-              const buf = Buffer.from(res.data || []);
-              if (buf.length && ct.startsWith('image/')) {
-                await ctx.replyWithPhoto({ source: buf }, menuKeyboard(ctx));
-              } else {
-                await ctx.reply('Không gửi được QR.', menuKeyboard(ctx));
-              }
-            } else {
-              const buf = Buffer.from(qrRaw, 'base64');
-              if (buf.length) await ctx.replyWithPhoto({ source: buf }, menuKeyboard(ctx));
-            }
+            const ok = await sendQrFromRaw(ctx, qrRaw);
+            if (!ok) await ctx.reply('Không gửi được QR.', menuKeyboard(ctx));
           }
         } catch (_) {
           try {
