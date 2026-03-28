@@ -381,20 +381,38 @@ startCallbackServer()
 if (!bot) {
   module.exports = null;
 } else {
+  const USER_BOT_COMMANDS = [
+    { command: 'start', description: 'Bắt đầu' },
+    { command: 'menu', description: 'Mở menu thao tác' },
+    { command: 'status', description: 'Kiểm tra tài khoản: /status <clientRequestId>' },
+    { command: 'id', description: 'Xem Telegram ID của bạn' },
+  ];
+
+  const ADMIN_BOT_COMMANDS = [
+    ...USER_BOT_COMMANDS,
+    { command: 'users', description: '(Admin) Danh sách user' },
+    { command: 'active', description: '(Admin) Kích hoạt user: /active <id>' },
+    { command: 'deactive', description: '(Admin) Hủy kích hoạt: /deactive <id>' },
+    { command: 'setfee', description: '(Admin) Set phí: /setfee <id|all> <%>' },
+    { command: 'setlimit', description: '(Admin) Set giới hạn VA: /setlimit <id> <số>' },
+    { command: 'firmtoken', description: '(Admin) Lấy token chi hộ' },
+  ];
+
+  async function syncCommandMenuForChat(ctx) {
+    try {
+      const chatId = ctx?.chat?.id;
+      const chatType = ctx?.chat?.type;
+      if (!chatId || chatType !== 'private') return;
+      const isAdmin = !!ctx?.from?.id && isAdminId(ctx.from.id);
+      await bot.telegram.setMyCommands(isAdmin ? ADMIN_BOT_COMMANDS : USER_BOT_COMMANDS, {
+        scope: { type: 'chat', chat_id: chatId },
+      });
+    } catch (_) {}
+  }
+
   (async () => {
     try {
-      await bot.telegram.setMyCommands([
-        { command: 'start', description: 'Bắt đầu' },
-        { command: 'menu', description: 'Mở menu thao tác' },
-        { command: 'status', description: 'Kiểm tra tài khoản: /status <clientRequestId>' },
-        { command: 'id', description: 'Xem Telegram ID của bạn' },
-        { command: 'users', description: '(Admin) Danh sách user' },
-        { command: 'active', description: '(Admin) Kích hoạt user: /active <id>' },
-        { command: 'deactive', description: '(Admin) Hủy kích hoạt: /deactive <id>' },
-        { command: 'setfee', description: '(Admin) Set phí: /setfee <id|all> <%>' },
-        { command: 'setlimit', description: '(Admin) Set giới hạn VA: /setlimit <id> <số>' },
-        { command: 'firmtoken', description: '(Admin) Lấy token chi hộ' },
-      ]);
+      await bot.telegram.setMyCommands(USER_BOT_COMMANDS);
     } catch (_) {}
   })();
 
@@ -601,6 +619,7 @@ if (!bot) {
   });
 
   bot.start(async (ctx) => {
+    await syncCommandMenuForChat(ctx);
     if (!isAdminId(ctx.from.id)) {
       const u = db.getUser(ctx.from.id);
       if (!u.isActive) {
@@ -677,6 +696,7 @@ const ibftState = new Map();
 
   bot.command('menu', async (ctx) => {
     awaitingName.delete(ctx.from.id);
+    await syncCommandMenuForChat(ctx);
     await ctx.reply('Menu:', menuKeyboard(ctx));
   });
 
