@@ -1687,14 +1687,23 @@ const ibftState = new Map();
         return next();
       }
       awaitingName.delete(ctx.from.id);
-      const name = text;
-      if (name.trim().length === 0) {
-        await ctx.reply('Tên trống, vui lòng nhập lại.', menuKeyboard(ctx));
+      const rawName = String(text || '').trim().replace(/\s+/g, ' ');
+      const endsOk = /[0-9A-Za-zÀ-ỹ]$/u.test(rawName);
+      const wordCount = rawName
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^A-Za-z0-9 ]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .split(' ')
+        .filter(Boolean).length;
+      if (!rawName || !endsOk || wordCount < 2) {
+        await ctx.reply('Vui lòng nhập đầy đủ Họ và Tên (ví dụ: Nguyen Van A). Không được kết thúc bằng dấu chấm.', menuKeyboard(ctx));
         return;
       }
       
-      confirmCreateState.set(ctx.from.id, name);
-      await ctx.reply(`Bạn chuẩn bị tạo VA với tên: *${name}*\n\nVui lòng xác nhận:`, {
+      confirmCreateState.set(ctx.from.id, rawName);
+      await ctx.reply(`Bạn chuẩn bị tạo VA với tên: *${rawName}*\n\nVui lòng xác nhận:`, {
         parse_mode: 'Markdown',
         reply_markup: Markup.inlineKeyboard([
           [Markup.button.callback('✅ Xác nhận tạo', 'va_confirm')],
