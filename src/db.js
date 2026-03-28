@@ -216,7 +216,16 @@ function getUser(id) {
   const users = loadUsers();
   const key = String(id);
   if (!users[key]) {
-    users[key] = { id: key, isActive: false, feePercent: null, vaLimit: null, balance: 0, createdVA: 0 };
+    users[key] = {
+      id: key,
+      isActive: false,
+      feePercent: null,
+      ipnFeeFlat: null,
+      withdrawFeeFlat: null,
+      vaLimit: null,
+      balance: 0,
+      createdVA: 0,
+    };
     saveUsers(users);
   }
   return users[key];
@@ -239,7 +248,7 @@ function getAllUsers() {
 }
 
 function getConfig() {
-  return readEncryptedFile(CONFIG_FILE, { globalFeePercent: 0, ipnFeeFlat: 4000 });
+  return readEncryptedFile(CONFIG_FILE, { globalFeePercent: 0, ipnFeeFlat: 4000, withdrawFeeFlat: 4000 });
 }
 
 function updateConfig(data) {

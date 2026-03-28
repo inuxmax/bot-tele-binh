@@ -14,6 +14,7 @@ const requestToChat = new Map();
 const requestStatus = new Map();
 const awaitingStatus = new Map();
 const withdrawState = new Map();
+const smallTxTracker = new Map();
 
 function isAdminId(id) {
   const raw = process.env.ADMIN_IDS || '';
@@ -566,11 +567,16 @@ app.get('/va/callback', async (req, res) => {
     const rec = db.getByRequestId(clientRequestId) || {};
     const gross = toAmountNumber(amount);
     const cfg = db.getConfig();
-    const feeFlat = Math.max(0, Number(cfg.ipnFeeFlat || 0) || 0);
+    let feeFlat = Math.max(0, Number(cfg.ipnFeeFlat || 0) || 0);
+    if (rec.userId) {
+      const u = db.getUser(rec.userId);
+      const uf = u && u.ipnFeeFlat !== null && u.ipnFeeFlat !== undefined ? Number(u.ipnFeeFlat) : NaN;
+      if (Number.isFinite(uf) && uf >= 0) feeFlat = uf;
+    }
     const credited = Math.max(0, gross - feeFlat);
+    const grossStr = gross.toLocaleString();
     const creditedStr = credited.toLocaleString();
     const feeFlatStr = feeFlat.toLocaleString();
-    const grossStr = gross.toLocaleString();
 
     if (rec.status !== 'paid' && rec.userId) {
       const u = db.getUser(rec.userId);
@@ -616,6 +622,31 @@ app.get('/va/callback', async (req, res) => {
       } catch (_) {}
       requestToChat.delete(clientRequestId);
     }
+
+    try {
+      const uid = rec.userId ? String(rec.userId) : '';
+      const smallLimit = 30000;
+      const windowMs = 10 * 60 * 1000;
+      const threshold = 3;
+      if (uid && gross > 0 && gross < smallLimit) {
+        const now = Date.now();
+        const st = smallTxTracker.get(uid) || { times: [], lastNotify: 0 };
+        const times = Array.isArray(st.times) ? st.times : [];
+        const pruned = times.filter((t) => now - Number(t) <= windowMs);
+        pruned.push(now);
+        st.times = pruned;
+        if (pruned.length >= threshold && now - Number(st.lastNotify || 0) > windowMs) {
+          st.lastNotify = now;
+          const adminIds = String(process.env.ADMIN_IDS || '').split(',').map((s) => s.trim()).filter(Boolean);
+          for (const aid of adminIds) {
+            try {
+              await bot.telegram.sendMessage(aid, `⚠️ Cảnh báo: User ${uid} có ${pruned.length} giao dịch < ${smallLimit.toLocaleString()}đ trong 10 phút.`);
+            } catch (_) {}
+          }
+        }
+        smallTxTracker.set(uid, st);
+      }
+    } catch (_) {}
   }
 
   res.status(200).json({ error: ok ? '00' : '01', message: ok ? 'Success' : 'Invalid secure_code' });
@@ -1441,12 +1472,14 @@ const ibftState = new Map();
     db.updateUser(ctx.from.id, { balance: computed.balance });
     const user = db.getUser(ctx.from.id);
     const config = db.getConfig();
+    const feeFlat = Math.max(0, Number(config.withdrawFeeFlat ?? config.ipnFeeFlat ?? 0) || 0);
     const feePercent = user.feePercent !== null ? user.feePercent : config.globalFeePercent;
     
     const msg = `ℹ️ THÔNG TIN TÀI KHOẢN\n\n` +
       `👤 ID: \`${user.id}\`\n` +
       `💰 Tổng số dư: ${user.balance.toLocaleString()}đ\n` +
-      `📉 Phí rút tiền: ${feePercent}%\n` +
+      `💸 Phí chuyển: ${feeFlat.toLocaleString()}đ\n` +
+      `📉 Phí rút: ${feePercent}%\n` +
       `📊 Tổng số VA đã tạo: ${user.createdVA}\n` +
       `🚫 Giới hạn tạo VA: ${user.vaLimit !== null ? user.vaLimit : 'Không giới hạn'}`;
       
@@ -1472,7 +1505,9 @@ const ibftState = new Map();
       `/deactive <id> : Hủy kích hoạt\n` +
       `/setfee <id> <%> : Set % phí cho user\n` +
       `/setfee all <%> : Set % phí chung\n` +
-      `/setipnfee <số> : Set phí giao dịch tiền về (VNĐ)\n` +
+      `/setipnfee <số> : Set phí chuyển rút tiền (VNĐ)\n` +
+      `/setipnfeeuser <id> <số> : Set phí giao dịch tiền về (VNĐ) theo user\n` +
+      `/setwdfeeuser <id> <số> : Set phí chuyển rút tiền (VNĐ) theo user\n` +
       `/balhist [n] : Xem lịch sử số dư admin\n` +
       `/user <id> : Xem thông tin user\n` +
       `/uhist <id> [n] : Xem lịch sử số dư user\n` +
@@ -1519,8 +1554,34 @@ const ibftState = new Map();
     const parts = ctx.message.text.split(' ');
     const fee = Number(String(parts[1] || '').replace(/[^\d]/g, ''));
     if (!Number.isFinite(fee) || fee < 0) return ctx.reply('Cú pháp: /setipnfee <số>');
-    db.updateConfig({ ipnFeeFlat: fee });
-    await ctx.reply(`Đã set phí giao dịch tiền về: ${fee.toLocaleString()}đ`);
+    db.updateConfig({ withdrawFeeFlat: fee, ipnFeeFlat: fee });
+    await ctx.reply(`Đã set phí chuyển rút tiền: ${fee.toLocaleString()}đ`);
+  });
+
+  bot.command('setipnfeeuser', async (ctx) => {
+    if (!isAdminId(ctx.from.id)) return;
+    const parts = String(ctx.message?.text || '').trim().split(/\s+/);
+    const id = String(parts[1] || '').trim();
+    const fee = Number(String(parts[2] || '').replace(/[^\d]/g, ''));
+    if (!id || !Number.isFinite(fee) || fee < 0) {
+      await ctx.reply('Cú pháp: /setipnfeeuser <id> <số>', menuKeyboard(ctx));
+      return;
+    }
+    db.updateUser(id, { ipnFeeFlat: fee });
+    await ctx.reply(`Đã set phí giao dịch tiền về cho user ${id}: ${fee.toLocaleString()}đ`, menuKeyboard(ctx));
+  });
+
+  bot.command('setwdfeeuser', async (ctx) => {
+    if (!isAdminId(ctx.from.id)) return;
+    const parts = String(ctx.message?.text || '').trim().split(/\s+/);
+    const id = String(parts[1] || '').trim();
+    const fee = Number(String(parts[2] || '').replace(/[^\d]/g, ''));
+    if (!id || !Number.isFinite(fee) || fee < 0) {
+      await ctx.reply('Cú pháp: /setwdfeeuser <id> <số>', menuKeyboard(ctx));
+      return;
+    }
+    db.updateUser(id, { withdrawFeeFlat: fee });
+    await ctx.reply(`Đã set phí chuyển rút tiền cho user ${id}: ${fee.toLocaleString()}đ`, menuKeyboard(ctx));
   });
 
   bot.command('setlimit', async (ctx) => {
@@ -1584,12 +1645,18 @@ const ibftState = new Map();
     }
     const u = db.getUser(id);
     const config = db.getConfig();
+    const feeFlat = Math.max(0, Number(config.withdrawFeeFlat ?? config.ipnFeeFlat ?? 0) || 0);
     const feePercent = u.feePercent !== null ? u.feePercent : config.globalFeePercent;
+    const ipnFeeUser = u.ipnFeeFlat !== null && u.ipnFeeFlat !== undefined ? Number(u.ipnFeeFlat) : NaN;
+    const wdFeeUser = u.withdrawFeeFlat !== null && u.withdrawFeeFlat !== undefined ? Number(u.withdrawFeeFlat) : NaN;
     const lines = [];
     lines.push(`ID: ${u.id}`);
     lines.push(`Trạng thái: ${u.isActive ? 'Active' : 'Inactive'}`);
     lines.push(`Số dư: ${Number(u.balance || 0).toLocaleString()}đ`);
+    lines.push(`Phí chuyển: ${feeFlat.toLocaleString()}đ`);
     lines.push(`Phí rút: ${feePercent}%`);
+    if (Number.isFinite(ipnFeeUser)) lines.push(`Phí tiền về (user): ${Math.max(0, ipnFeeUser).toLocaleString()}đ`);
+    if (Number.isFinite(wdFeeUser)) lines.push(`Phí chuyển rút (user): ${Math.max(0, wdFeeUser).toLocaleString()}đ`);
     lines.push(`VA: ${u.createdVA}/${u.vaLimit !== null ? u.vaLimit : '∞'}`);
     const saved = Array.isArray(u.withdrawBanks) ? u.withdrawBanks : [];
     if (saved.length) lines.push(`Bank đã lưu: ${saved.length}`);
@@ -1700,7 +1767,16 @@ const ibftState = new Map();
     await ctx.reply(`Đã cập nhật ${st.id} → đã rút.`, menuKeyboard(ctx));
     if (w.userId) {
       try {
-        await bot.telegram.sendMessage(w.userId, `Yêu cầu rút tiền ${w.id} đã được xử lý (Đã rút).`);
+        const amount = Number(w.amount) || 0;
+        const fee = Number(w.feeFlat) || 0;
+        const net = Number(w.actualReceive) || Math.max(0, amount - fee);
+        const msg =
+          `✅ Rút tiền thành công!\n\n` +
+          `💵 Số tiền rút: ${amount.toLocaleString()} đ\n\n` +
+          `💸 Phí chuyển: ${fee.toLocaleString()} đ\n\n` +
+          `💰 Thực nhận: ${net.toLocaleString()} đ\n\n` +
+          `🏦 Đã chuyển vào tài khoản ngân hàng của bạn`;
+        await bot.telegram.sendMessage(w.userId, msg);
       } catch (_) {}
     }
   });
@@ -2127,15 +2203,19 @@ const ibftState = new Map();
         }
         
         const config = db.getConfig();
+        let feeFlat = Math.max(0, Number(config.withdrawFeeFlat ?? config.ipnFeeFlat ?? 0) || 0);
+        const userFeeFlat = user.withdrawFeeFlat !== null && user.withdrawFeeFlat !== undefined ? Number(user.withdrawFeeFlat) : NaN;
+        if (Number.isFinite(userFeeFlat) && userFeeFlat >= 0) feeFlat = userFeeFlat;
         const feePercent = user.feePercent !== null ? user.feePercent : config.globalFeePercent;
-        const actualReceive = amount - (amount * feePercent / 100);
+        const feeByPercent = Math.floor((amount * Number(feePercent || 0)) / 100);
+        const actualReceive = Math.max(0, amount - feeFlat - feeByPercent);
 
+        const id = `WD${Date.now().toString().slice(-10)}${Math.floor(100000 + Math.random() * 900000)}`;
         db.updateUser(ctx.from.id, { balance: user.balance - amount });
         try {
           db.addUserBalanceHistory({ ts: Date.now(), userId: ctx.from.id, delta: -amount, balanceAfter: user.balance - amount, reason: 'withdraw_create', ref: id });
         } catch (_) {}
 
-        const id = `WD${Date.now().toString().slice(-10)}${Math.floor(100000 + Math.random() * 900000)}`;
         const rec = {
           id,
           userId: ctx.from.id,
@@ -2147,6 +2227,7 @@ const ibftState = new Map();
           network: wst.network,
           wallet: wst.wallet,
           amount,
+          feeFlat,
           feePercent,
           actualReceive,
           createdAt: Date.now(),
@@ -2157,12 +2238,14 @@ const ibftState = new Map();
         const userAfter = db.getUser(ctx.from.id);
         const msgUser =
           `✅ Yêu cầu rút tiền đã được tạo\n\n` +
-          `💵 Số tiền: ${amount.toLocaleString()} đ\n` +
+          `💵 Số tiền rút: ${amount.toLocaleString()} đ\n` +
+          `💸 Phí chuyển: ${feeFlat.toLocaleString()} đ\n` +
+          `📉 Phí rút: ${feePercent}%\n` +
+          `✅ Thực nhận: ${actualReceive.toLocaleString()} đ\n` +
           `🏦 Ngân hàng: ${rec.bankName}\n` +
           `💳 STK: ${rec.bankAccount}\n` +
           `👤 Chủ TK: ${rec.bankHolder}\n` +
-          `💰 Số dư còn lại: ${Number(userAfter.balance || 0).toLocaleString()} đ\n` +
-          `📉 Phí rút: ${feePercent}%\n\n` +
+          `💰 Số dư còn lại: ${Number(userAfter.balance || 0).toLocaleString()} đ\n\n` +
           `⏳ Đang chờ duyệt...`;
         await ctx.reply(msgUser, menuKeyboard(ctx));
         const adminRaw = process.env.ADMIN_IDS || '';
@@ -2179,7 +2262,9 @@ const ibftState = new Map();
               `💳 STK: ${rec.bankAccount}\n` +
               `👤 Chủ TK: ${rec.bankHolder}\n\n` +
               `💵 Số tiền trừ: ${amount.toLocaleString()}đ\n` +
-              `✅ Thực nhận: ${actualReceive.toLocaleString()}đ`;
+              `💸 Phí chuyển: ${feeFlat.toLocaleString()}đ\n` +
+              `📉 Phí rút: ${feePercent}%\n` +
+              `💰 Thực nhận: ${actualReceive.toLocaleString()}đ`;
             await bot.telegram.sendMessage(aid, msgAdmin);
           } catch (_) {}
         }
