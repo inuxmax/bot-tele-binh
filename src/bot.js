@@ -93,6 +93,102 @@ const IBFT_BANKS = [
   { code: 'WRB', name: 'Woori Bank' },
 ];
 
+const IBFT_BANK_LABEL_OVERRIDES = {
+  ACB: 'ACB',
+  AGB: 'Agribank',
+  ABB: 'ABBank',
+  BAB: 'Bắc Á Bank',
+  BIDV: 'BIDV',
+  CIMB: 'CIMB Vietnam',
+  DAB: 'Đông Á Bank',
+  EXB: 'Eximbank',
+  HDB: 'HDBank',
+  HSBC: 'HSBC Vietnam',
+  ICB: 'Vietinbank',
+  KLB: 'KienLongBank',
+  MB: 'MB Bank',
+  MSB: 'MSB',
+  NAB: 'Nam Á Bank',
+  NVB: 'NCB',
+  OCB: 'OCB',
+  OJB: 'OceanBank',
+  PVCB: 'PVcomBank',
+  SCB: 'SCB',
+  SEA: 'SeABank',
+  SGB: 'Saigonbank',
+  SHB: 'SHB',
+  STB: 'Sacombank',
+  TCB: 'Techcombank',
+  TIMOB: 'Timo',
+  TPB: 'TPBank',
+  UOB: 'UOB',
+  VAB: 'VietABank',
+  VB: 'VietBank',
+  VCB: 'Vietcombank',
+  VIB: 'VIB',
+  VPB: 'VPBank',
+  VRB: 'VRB',
+};
+
+const IBFT_BANK_PICK_CODES = [
+  'BIDV', 'VCB', 'ICB', 'TCB', 'MB', 'ACB', 'VPB', 'TPB', 'STB', 'HDB', 'AGB', 'SHB',
+  'VIB', 'DAB', 'VAB', 'MSB', 'EXB', 'ABB', 'NAB', 'OJB', 'SEA', 'BAB', 'NVB', 'SGB',
+  'PVCB', 'KLB', 'SCB', 'HSBC', 'CIMB', 'UOB', 'VB', 'VRB', 'OCB', 'TIMOB',
+];
+
+const IBFT_NAV_NEXT = '📋 Xem thêm';
+const IBFT_NAV_PREV = '⬅️ Trước';
+const IBFT_NAV_NEXT2 = 'Sau ➡️';
+const IBFT_NAV_BACK = '⬅️ Quay lại';
+
+function getIbftBankLabel(code) {
+  const c = String(code || '').trim().toUpperCase();
+  if (!c) return '';
+  if (IBFT_BANK_LABEL_OVERRIDES[c]) return IBFT_BANK_LABEL_OVERRIDES[c];
+  const found = IBFT_BANKS.find((b) => b.code === c);
+  return found ? found.name : c;
+}
+
+const IBFT_BANK_LABEL_TO_CODE = (() => {
+  const m = new Map();
+  for (const c of IBFT_BANK_PICK_CODES) {
+    const label = getIbftBankLabel(c);
+    if (label && !m.has(label)) m.set(label, c);
+  }
+  return m;
+})();
+
+function buildIbftBankKeyboard(page = 0) {
+  const codes = IBFT_BANK_PICK_CODES.filter((c) => IBFT_BANKS.some((b) => b.code === c));
+  const pageSize = 12;
+  const pageCount = Math.max(1, Math.ceil(codes.length / pageSize));
+  const p = Math.max(0, Math.min(page, pageCount - 1));
+  const slice = codes.slice(p * pageSize, p * pageSize + pageSize).map(getIbftBankLabel).filter(Boolean);
+
+  const rows = [];
+  for (let i = 0; i < slice.length; i += 3) rows.push(slice.slice(i, i + 3));
+
+  if (pageCount === 1) {
+    rows.push([IBFT_NAV_BACK]);
+  } else if (p === 0) {
+    rows.push([IBFT_NAV_NEXT, IBFT_NAV_BACK]);
+  } else if (p === pageCount - 1) {
+    rows.push([IBFT_NAV_PREV, IBFT_NAV_BACK]);
+  } else {
+    rows.push([IBFT_NAV_PREV, IBFT_NAV_NEXT2]);
+  }
+  return Markup.keyboard(rows).resize();
+}
+
+function buildWithdrawBankKeyboard(page = 0) {
+  const kb = buildIbftBankKeyboard(page);
+  const rows = kb?.reply_markup?.keyboard || [];
+  const last = rows[rows.length - 1] || [];
+  const hasCancel = last.includes('❌ Hủy') || rows.some((r) => r.includes('❌ Hủy'));
+  if (!hasCancel) rows.push(['❌ Hủy']);
+  return Markup.keyboard(rows).resize();
+}
+
 function normalizeSearch(s) {
   return String(s || '')
     .trim()
@@ -259,7 +355,7 @@ function menuKeyboard(ctx) {
 }
 
 function isMenuText(t) {
-  return t === '🎲 Random tên' || t === '✍️ Nhập tên' || t === '🔑 Lấy token' || t === '💰 Số dư' || t === '🔎 Kiểm tra tài khoản' || t === '💸 Rút tiền' || t === '📋 DS rút' || t === '🔄 Cập nhật rút' || t === '⚙️ Quản lý' || t === '🗂 VA đã tạo' || t === 'ℹ️ Thông tin' || t === '🏦 Bank' || t === '🪙 USDT' || t === 'Đã rút' || t === 'Chưa rút' || t === 'Từ chối' || t === 'Rút ALL' || t === '✅ Xác nhận tạo' || t === '✅ Xác nhận chi hộ' || t === '❌ Hủy' || t === '/menu' || t === '/start' || t === '🏧 Chi hộ' || t === '🏦 MSB' || t === '🏦 KLB' || t === '🏦 BIDV (BẢO TRÌ)';
+  return t === '🎲 Random tên' || t === '✍️ Nhập tên' || t === '🔑 Lấy token' || t === '💰 Số dư' || t === '🔎 Kiểm tra tài khoản' || t === '💸 Rút tiền' || t === '📋 DS rút' || t === '🔄 Cập nhật rút' || t === '⚙️ Quản lý' || t === '🗂 VA đã tạo' || t === 'ℹ️ Thông tin' || t === 'Đã rút' || t === 'Chưa rút' || t === 'Từ chối' || t === 'Rút ALL' || t === '✅ Xác nhận tạo' || t === '✅ Xác nhận chi hộ' || t === '❌ Hủy' || t === '/menu' || t === '/start' || t === '🏧 Chi hộ' || t === '🏦 MSB' || t === '🏦 KLB' || t === '🏦 BIDV (BẢO TRÌ)';
 }
 
 const app = express();
@@ -760,32 +856,6 @@ const ibftState = new Map();
     await handleCreateVA(ctx, st.name, bank);
   });
 
-  bot.action(/^wd_method:(bank|usdt)$/, async (ctx) => {
-    try {
-      await ctx.answerCbQuery();
-    } catch (_) {}
-    const st = withdrawState.get(ctx.from.id);
-    if (!st || st.stage !== 'choose_method') return;
-    const method = ctx.match[1];
-    if (method === 'bank') {
-      withdrawState.set(ctx.from.id, { stage: 'bank_name', method: 'bank' });
-      try {
-        await ctx.editMessageReplyMarkup(undefined);
-      } catch (_) {}
-      await ctx.reply('Nhập tên ngân hàng (ví dụ: KLB, BIDV...):', {
-        reply_markup: Markup.inlineKeyboard([[Markup.button.callback('❌ Hủy', 'cancel')]]).reply_markup,
-      });
-      return;
-    }
-    withdrawState.set(ctx.from.id, { stage: 'usdt_network', method: 'usdt' });
-    try {
-      await ctx.editMessageReplyMarkup(undefined);
-    } catch (_) {}
-    await ctx.reply('Nhập network (TRC20/ERC20/BEP20):', {
-      reply_markup: Markup.inlineKeyboard([[Markup.button.callback('❌ Hủy', 'cancel')]]).reply_markup,
-    });
-  });
-
   bot.hears('🎲 Random tên', async (ctx) => {
     randomNameState.set(ctx.from.id, { stage: 'enter_prefix' });
     await ctx.reply('Nhập Họ và Tên đệm (Ví dụ: LE VAN):', {
@@ -917,11 +987,8 @@ const ibftState = new Map();
       await ctx.reply('Bạn không có quyền dùng chức năng này.', menuKeyboard(ctx));
       return;
     }
-    ibftState.set(ctx.from.id, { stage: 'enter_bank' });
-    await ctx.reply(
-      'Nhập mã ngân hàng hoặc gõ tên để tìm (Ví dụ: VCB hoặc vietcom). Chọn nhanh:',
-      Markup.keyboard([['🏦 MSB', '🏦 KLB'], ['🏦 VCB', '🏦 BIDV'], ['🏦 ACB', '🏦 TCB'], ['❌ Hủy']]).resize()
-    );
+    ibftState.set(ctx.from.id, { stage: 'enter_bank', page: 0 });
+    await ctx.reply('🏦 Chọn ngân hàng:', buildIbftBankKeyboard(0));
   });
 
   bot.hears('✅ Xác nhận chi hộ', async (ctx) => {
@@ -1100,31 +1167,8 @@ const ibftState = new Map();
 
   bot.hears('💸 Rút tiền', async (ctx) => {
     const user = db.getUser(ctx.from.id);
-    withdrawState.set(ctx.from.id, { stage: 'choose_method', balance: user.balance });
-    await ctx.reply(`Số dư khả dụng: ${user.balance.toLocaleString()}đ\nChọn phương thức rút:`, {
-      reply_markup: Markup.inlineKeyboard([
-        [Markup.button.callback('🏦 Bank', 'wd_method:bank'), Markup.button.callback('🪙 USDT', 'wd_method:usdt')],
-        [Markup.button.callback('❌ Hủy', 'cancel')],
-      ]).reply_markup,
-    });
-  });
-
-  bot.hears('🏦 Bank', async (ctx, next) => {
-    const st = withdrawState.get(ctx.from.id);
-    if (!st || st.stage !== 'choose_method') return next();
-    withdrawState.set(ctx.from.id, { stage: 'bank_name', method: 'bank' });
-    await ctx.reply('Nhập tên ngân hàng (ví dụ: KLB, BIDV...):', {
-      reply_markup: Markup.inlineKeyboard([[Markup.button.callback('❌ Hủy', 'cancel')]]).reply_markup,
-    });
-  });
-
-  bot.hears('🪙 USDT', async (ctx, next) => {
-    const st = withdrawState.get(ctx.from.id);
-    if (!st || st.stage !== 'choose_method') return next();
-    withdrawState.set(ctx.from.id, { stage: 'usdt_network', method: 'usdt' });
-    await ctx.reply('Nhập network (TRC20/ERC20/BEP20):', {
-      reply_markup: Markup.inlineKeyboard([[Markup.button.callback('❌ Hủy', 'cancel')]]).reply_markup,
-    });
+    withdrawState.set(ctx.from.id, { stage: 'choose_bank', page: 0, balance: user.balance, method: 'bank' });
+    await ctx.reply(`Số dư khả dụng: ${user.balance.toLocaleString()}đ\n🏦 Chọn ngân hàng:`, buildWithdrawBankKeyboard(0));
   });
 
   bot.hears('❌ Hủy', async (ctx) => {
@@ -1312,32 +1356,53 @@ const ibftState = new Map();
       const allowBankPick = (ibft.stage === 'enter_bank' || ibft.stage === 'pick_bank') && text.trim().startsWith('🏦');
       if (isMenuText(text) && !allowBankPick) return next();
       if (ibft.stage === 'enter_bank') {
-        let raw = text.trim();
-        if (raw.startsWith('🏦')) raw = raw.replace(/^🏦\s*/i, '').trim();
-        const fromPick = raw.match(/^([A-Z0-9]+)\b/);
-        const query = (fromPick && fromPick[1]) ? fromPick[1] : raw;
-        const normalized = normalizeSearch(query);
+        const raw = text.trim();
+
+        const pageCount = Math.max(1, Math.ceil(IBFT_BANK_PICK_CODES.length / 12));
+        const curPage = Number.isFinite(Number(ibft.page)) ? Number(ibft.page) : 0;
+        if (raw === IBFT_NAV_BACK) {
+          clearUserStates(ctx.from.id);
+          await ctx.reply('Menu:', menuKeyboard(ctx));
+          return;
+        }
+        if (raw === IBFT_NAV_NEXT || raw === IBFT_NAV_NEXT2) {
+          const nextPage = Math.min(pageCount - 1, curPage + 1);
+          ibftState.set(ctx.from.id, { ...ibft, stage: 'enter_bank', page: nextPage });
+          await ctx.reply('🏦 Chọn ngân hàng:', buildIbftBankKeyboard(nextPage));
+          return;
+        }
+        if (raw === IBFT_NAV_PREV) {
+          const prevPage = Math.max(0, curPage - 1);
+          ibftState.set(ctx.from.id, { ...ibft, stage: 'enter_bank', page: prevPage });
+          await ctx.reply('🏦 Chọn ngân hàng:', buildIbftBankKeyboard(prevPage));
+          return;
+        }
+
+        const directCode = IBFT_BANK_LABEL_TO_CODE.get(raw);
+        const normalized = normalizeSearch(raw);
 
         if (!normalized) {
           await ctx.reply(
-            'Mã/tên ngân hàng không hợp lệ. Nhập lại (Ví dụ: VCB hoặc vietcom):',
-            Markup.keyboard([['🏦 MSB', '🏦 KLB'], ['🏦 VCB', '🏦 BIDV'], ['🏦 ACB', '🏦 TCB'], ['❌ Hủy']]).resize()
+            'Mã/tên ngân hàng không hợp lệ. Vui lòng chọn trong danh sách hoặc gõ tên để tìm:',
+            buildIbftBankKeyboard(curPage)
           );
           return;
         }
 
-        const exact = IBFT_BANKS.find((b) => normalizeSearch(b.code) === normalized);
+        const exact = directCode ? IBFT_BANKS.find((b) => b.code === directCode) : IBFT_BANKS.find((b) => normalizeSearch(b.code) === normalized);
         if (exact) {
           ibftState.set(ctx.from.id, { ...ibft, stage: 'enter_account', bankCode: exact.code });
-          await ctx.reply(`Đã chọn ngân hàng: ${exact.code} - ${exact.name}\nNhập số tài khoản nhận:`, Markup.keyboard([['❌ Hủy']]).resize());
+          await ctx.reply(`Đã chọn ngân hàng: ${getIbftBankLabel(exact.code)}\nNhập số tài khoản nhận:`, {
+            reply_markup: Markup.inlineKeyboard([[Markup.button.callback('❌ Hủy', 'cancel')]]).reply_markup,
+          });
           return;
         }
 
-        const matches = findIbftBanks(query, 8);
+        const matches = findIbftBanks(raw, 8);
         if (!matches.length) {
           await ctx.reply(
-            'Không tìm thấy ngân hàng. Bạn thử nhập mã (VCB, BIDV, ACB...) hoặc gõ tên (vietcom, techcom...):',
-            Markup.keyboard([['🏦 MSB', '🏦 KLB'], ['🏦 VCB', '🏦 BIDV'], ['🏦 ACB', '🏦 TCB'], ['❌ Hủy']]).resize()
+            'Không tìm thấy ngân hàng. Vui lòng chọn trong danh sách hoặc gõ tên để tìm:',
+            buildIbftBankKeyboard(curPage)
           );
           return;
         }
@@ -1345,7 +1410,9 @@ const ibftState = new Map();
         if (matches.length === 1) {
           const b = matches[0];
           ibftState.set(ctx.from.id, { ...ibft, stage: 'enter_account', bankCode: b.code });
-          await ctx.reply(`Đã chọn ngân hàng: ${b.code} - ${b.name}\nNhập số tài khoản nhận:`, Markup.keyboard([['❌ Hủy']]).resize());
+          await ctx.reply(`Đã chọn ngân hàng: ${getIbftBankLabel(b.code)}\nNhập số tài khoản nhận:`, {
+            reply_markup: Markup.inlineKeyboard([[Markup.button.callback('❌ Hủy', 'cancel')]]).reply_markup,
+          });
           return;
         }
 
@@ -1364,15 +1431,17 @@ const ibftState = new Map();
         const ok = code && Array.isArray(ibft.bankMatches) && ibft.bankMatches.includes(code);
         const b = IBFT_BANKS.find((x) => x.code === code);
         if (!ok || !b) {
-          ibftState.set(ctx.from.id, { stage: 'enter_bank' });
+          ibftState.set(ctx.from.id, { stage: 'enter_bank', page: 0 });
           await ctx.reply(
-            'Lựa chọn không hợp lệ. Nhập lại mã ngân hàng hoặc gõ tên để tìm:',
-            Markup.keyboard([['🏦 MSB', '🏦 KLB'], ['🏦 VCB', '🏦 BIDV'], ['🏦 ACB', '🏦 TCB'], ['❌ Hủy']]).resize()
+            'Lựa chọn không hợp lệ. Vui lòng chọn trong danh sách hoặc gõ tên để tìm:',
+            buildIbftBankKeyboard(0)
           );
           return;
         }
         ibftState.set(ctx.from.id, { ...ibft, stage: 'enter_account', bankCode: b.code, bankMatches: undefined });
-        await ctx.reply(`Đã chọn ngân hàng: ${b.code} - ${b.name}\nNhập số tài khoản nhận:`, Markup.keyboard([['❌ Hủy']]).resize());
+        await ctx.reply(`Đã chọn ngân hàng: ${getIbftBankLabel(b.code)}\nNhập số tài khoản nhận:`, {
+          reply_markup: Markup.inlineKeyboard([[Markup.button.callback('❌ Hủy', 'cancel')]]).reply_markup,
+        });
         return;
       }
 
@@ -1462,6 +1531,90 @@ const ibftState = new Map();
     const wst = withdrawState.get(ctx.from.id);
     if (wst) {
       if (isMenuText(text)) return next();
+      if (wst.stage === 'choose_bank') {
+        const raw = text.trim();
+        const pageCount = Math.max(1, Math.ceil(IBFT_BANK_PICK_CODES.length / 12));
+        const curPage = Number.isFinite(Number(wst.page)) ? Number(wst.page) : 0;
+        if (raw === IBFT_NAV_BACK) {
+          clearUserStates(ctx.from.id);
+          await ctx.reply('Menu:', menuKeyboard(ctx));
+          return;
+        }
+        if (raw === IBFT_NAV_NEXT || raw === IBFT_NAV_NEXT2) {
+          const nextPage = Math.min(pageCount - 1, curPage + 1);
+          withdrawState.set(ctx.from.id, { ...wst, stage: 'choose_bank', page: nextPage });
+          await ctx.reply('🏦 Chọn ngân hàng:', buildWithdrawBankKeyboard(nextPage));
+          return;
+        }
+        if (raw === IBFT_NAV_PREV) {
+          const prevPage = Math.max(0, curPage - 1);
+          withdrawState.set(ctx.from.id, { ...wst, stage: 'choose_bank', page: prevPage });
+          await ctx.reply('🏦 Chọn ngân hàng:', buildWithdrawBankKeyboard(prevPage));
+          return;
+        }
+
+        const directCode = IBFT_BANK_LABEL_TO_CODE.get(raw);
+        const normalized = normalizeSearch(raw);
+        if (!normalized) {
+          await ctx.reply('Vui lòng chọn ngân hàng trong danh sách hoặc gõ tên để tìm:', buildWithdrawBankKeyboard(curPage));
+          return;
+        }
+
+        const exact = directCode ? IBFT_BANKS.find((b) => b.code === directCode) : IBFT_BANKS.find((b) => normalizeSearch(b.code) === normalized);
+        if (exact) {
+          withdrawState.set(ctx.from.id, { ...wst, stage: 'bank_account', method: 'bank', bankName: getIbftBankLabel(exact.code) });
+          await ctx.reply(`Đã chọn ngân hàng: ${getIbftBankLabel(exact.code)}\nNhập số tài khoản:`, {
+            reply_markup: Markup.inlineKeyboard([[Markup.button.callback('❌ Hủy', 'cancel')]]).reply_markup,
+          });
+          return;
+        }
+
+        const matches = findIbftBanks(raw, 8);
+        if (matches.length === 1) {
+          const b = matches[0];
+          withdrawState.set(ctx.from.id, { ...wst, stage: 'bank_account', method: 'bank', bankName: getIbftBankLabel(b.code) });
+          await ctx.reply(`Đã chọn ngân hàng: ${getIbftBankLabel(b.code)}\nNhập số tài khoản:`, {
+            reply_markup: Markup.inlineKeyboard([[Markup.button.callback('❌ Hủy', 'cancel')]]).reply_markup,
+          });
+          return;
+        }
+
+        if (matches.length > 1) {
+          const buttons = matches.map((b) => `🏦 ${b.code} - ${getIbftBankLabel(b.code)}`);
+          const rows = [];
+          for (let i = 0; i < buttons.length; i += 3) rows.push(buttons.slice(i, i + 3));
+          rows.push([IBFT_NAV_BACK], ['❌ Hủy']);
+          withdrawState.set(ctx.from.id, { ...wst, stage: 'pick_bank', bankMatches: matches.map((b) => b.code) });
+          await ctx.reply('Tìm thấy nhiều ngân hàng, vui lòng chọn:', Markup.keyboard(rows).resize());
+          return;
+        }
+
+        await ctx.reply('Không tìm thấy ngân hàng. Vui lòng chọn trong danh sách hoặc gõ tên để tìm:', buildWithdrawBankKeyboard(curPage));
+        return;
+      }
+
+      if (wst.stage === 'pick_bank') {
+        const raw = text.trim();
+        if (raw === IBFT_NAV_BACK) {
+          withdrawState.set(ctx.from.id, { stage: 'choose_bank', page: 0, balance: wst.balance, method: 'bank' });
+          await ctx.reply('🏦 Chọn ngân hàng:', buildWithdrawBankKeyboard(0));
+          return;
+        }
+        const m = raw.match(/^🏦\s*([A-Z0-9]+)\b/);
+        const code = m ? m[1].trim().toUpperCase() : '';
+        const ok = code && Array.isArray(wst.bankMatches) && wst.bankMatches.includes(code);
+        const b = code ? IBFT_BANKS.find((x) => x.code === code) : null;
+        if (!ok || !b) {
+          await ctx.reply('Vui lòng chọn 1 ngân hàng trong danh sách:', Markup.keyboard([[IBFT_NAV_BACK], ['❌ Hủy']]).resize());
+          return;
+        }
+        withdrawState.set(ctx.from.id, { ...wst, stage: 'bank_account', method: 'bank', bankName: getIbftBankLabel(b.code), bankMatches: undefined });
+        await ctx.reply(`Đã chọn ngân hàng: ${getIbftBankLabel(b.code)}\nNhập số tài khoản:`, {
+          reply_markup: Markup.inlineKeyboard([[Markup.button.callback('❌ Hủy', 'cancel')]]).reply_markup,
+        });
+        return;
+      }
+
       if (wst.stage === 'bank_name') {
         withdrawState.set(ctx.from.id, { ...wst, stage: 'bank_account', bankName: text.trim().slice(0, 50) });
         await ctx.reply('Nhập số tài khoản:', Markup.keyboard([['❌ Hủy']]).resize());
@@ -1469,21 +1622,13 @@ const ibftState = new Map();
       }
       if (wst.stage === 'bank_account') {
         withdrawState.set(ctx.from.id, { ...wst, stage: 'bank_holder', bankAccount: text.trim().slice(0, 64) });
-        await ctx.reply('Nhập tên chủ tài khoản:', Markup.keyboard([['❌ Hủy']]).resize());
+        await ctx.reply('Nhập tên chủ tài khoản:', {
+          reply_markup: Markup.inlineKeyboard([[Markup.button.callback('❌ Hủy', 'cancel')]]).reply_markup,
+        });
         return;
       }
       if (wst.stage === 'bank_holder') {
         withdrawState.set(ctx.from.id, { ...wst, stage: 'amount', bankHolder: text.trim().slice(0, 100) });
-        await ctx.reply('Nhập số tiền rút:', Markup.keyboard([['Rút ALL'], ['❌ Hủy']]).resize());
-        return;
-      }
-      if (wst.stage === 'usdt_network') {
-        withdrawState.set(ctx.from.id, { ...wst, stage: 'usdt_wallet', network: text.trim().toUpperCase().slice(0, 10) });
-        await ctx.reply('Nhập địa chỉ ví USDT:', Markup.keyboard([['❌ Hủy']]).resize());
-        return;
-      }
-      if (wst.stage === 'usdt_wallet') {
-        withdrawState.set(ctx.from.id, { ...wst, stage: 'amount', wallet: text.trim().slice(0, 120) });
         await ctx.reply('Nhập số tiền rút:', Markup.keyboard([['Rút ALL'], ['❌ Hủy']]).resize());
         return;
       }
