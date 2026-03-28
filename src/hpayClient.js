@@ -41,11 +41,10 @@ function buildHeaders(authHeader, midOverride) {
   const rawAuth = typeof authHeader === 'string' ? authHeader : process.env.HPAY_AUTH_TOKEN || '';
   const auth =
     rawAuth.toLowerCase().startsWith('bearer ') ? rawAuth : rawAuth ? `Bearer ${rawAuth}` : '';
-  return {
-    'x-api-mid': mid,
-    Authorization: auth,
-    'Content-Type': 'application/json',
-  };
+  const headers = { 'Content-Type': 'application/json' };
+  if (mid) headers['x-api-mid'] = mid;
+  if (auth) headers.Authorization = auth;
+  return headers;
 }
 
 async function createVirtualAccount({ requestId, vaName, vaType = '1', vaCondition = '2', vaAmount, remark, vaExpirationTime, bankCode, merchantIdOverride, passcodeOverride, clientIdOverride, clientSecretOverride, xApiMidOverride }) {
@@ -54,6 +53,8 @@ async function createVirtualAccount({ requestId, vaName, vaType = '1', vaConditi
 
   const merchantId = merchantIdOverride || process.env.HPAY_MERCHANT_ID || '';
   const passcode = passcodeOverride || process.env.HPAY_PASSCODE || '';
+  const midForHeader =
+    (xApiMidOverride || '').trim() || (merchantIdOverride || '').trim() || (process.env.HPAY_X_API_MID || '').trim() || (process.env.HPAY_MERCHANT_ID || '').trim();
   const privateKey = readPrivateKey();
   if (!privateKey) {
     throw new Error('Không tìm thấy private key: cấu hình HPAY_PRIVATE_KEY_B64 hoặc HPAY_PRIVATE_KEY (một dòng với \\n) hoặc HPAY_PRIVATE_KEY_FILE');
@@ -91,18 +92,21 @@ async function createVirtualAccount({ requestId, vaName, vaType = '1', vaConditi
     const tokenResp = await getAccessToken(process.env.HPAY_TOKEN_SCOPE || 'va', {
       clientId: clientIdOverride,
       clientSecret: clientSecretOverride,
-      mid: xApiMidOverride,
+      mid: midForHeader,
     });
     if (tokenResp && tokenResp.access_token) {
       authHeader = `Bearer ${tokenResp.access_token}`;
     }
-  } catch (_) {}
+  } catch (e) {
+    const status = e?.response?.status;
+    const msg = e?.response?.data?.error_description || e?.response?.data?.error || e.message;
+    throw new Error(`Lỗi lấy token VA${status ? ` (${status})` : ''}: ${msg}`);
+  }
   
   if (!authHeader) {
-    const rawAuth = process.env.HPAY_AUTH_TOKEN || '';
-    authHeader = rawAuth.toLowerCase().startsWith('bearer ') ? rawAuth : rawAuth ? `Bearer ${rawAuth}` : '';
+    throw new Error('Không lấy được token VA. Kiểm tra HPAY_CLIENT_ID/HPAY_CLIENT_SECRET và HPAY_X_API_MID.');
   }
-  const headers = buildHeaders(authHeader, xApiMidOverride);
+  const headers = buildHeaders(authHeader, midForHeader);
   const body = { data, signature };
 
   const res = await axios.post(url, body, { headers, timeout: 20000 });
