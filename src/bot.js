@@ -1465,6 +1465,8 @@ const ibftState = new Map();
       `/setfee <id> <%> : Set % phí cho user\n` +
       `/setfee all <%> : Set % phí chung\n` +
       `/setipnfee <số> : Set phí chuyển rút tiền (VNĐ)\n` +
+      `/setipnfeeall <số> : Set phí giao dịch tiền về (VNĐ) cho tất cả\n` +
+      `/setwdfeeall <số> : Set phí chuyển rút tiền (VNĐ) cho tất cả\n` +
       `/setipnfeeuser <id> <số> : Set phí giao dịch tiền về (VNĐ) theo user\n` +
       `/setwdfeeuser <id> <số> : Set phí chuyển rút tiền (VNĐ) theo user\n` +
       `/balhist [n] : Xem lịch sử số dư admin\n` +
@@ -1515,6 +1517,30 @@ const ibftState = new Map();
     if (!Number.isFinite(fee) || fee < 0) return ctx.reply('Cú pháp: /setipnfee <số>');
     db.updateConfig({ withdrawFeeFlat: fee, ipnFeeFlat: fee });
     await ctx.reply(`Đã set phí chuyển rút tiền: ${fee.toLocaleString()}đ`);
+  });
+
+  bot.command('setipnfeeall', async (ctx) => {
+    if (!isAdminId(ctx.from.id)) return;
+    const parts = String(ctx.message?.text || '').trim().split(/\s+/);
+    const fee = Number(String(parts[1] || '').replace(/[^\d]/g, ''));
+    if (!Number.isFinite(fee) || fee < 0) {
+      await ctx.reply('Cú pháp: /setipnfeeall <số>', menuKeyboard(ctx));
+      return;
+    }
+    db.updateConfig({ ipnFeeFlat: fee });
+    await ctx.reply(`Đã set phí giao dịch tiền về (tất cả): ${fee.toLocaleString()}đ`, menuKeyboard(ctx));
+  });
+
+  bot.command('setwdfeeall', async (ctx) => {
+    if (!isAdminId(ctx.from.id)) return;
+    const parts = String(ctx.message?.text || '').trim().split(/\s+/);
+    const fee = Number(String(parts[1] || '').replace(/[^\d]/g, ''));
+    if (!Number.isFinite(fee) || fee < 0) {
+      await ctx.reply('Cú pháp: /setwdfeeall <số>', menuKeyboard(ctx));
+      return;
+    }
+    db.updateConfig({ withdrawFeeFlat: fee });
+    await ctx.reply(`Đã set phí chuyển rút tiền (tất cả): ${fee.toLocaleString()}đ`, menuKeyboard(ctx));
   });
 
   bot.command('setipnfeeuser', async (ctx) => {
