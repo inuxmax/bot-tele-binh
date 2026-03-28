@@ -481,7 +481,7 @@ function menuKeyboard(ctx) {
       ['🎲 Random tên', '✍️ Nhập tên'],
       ['🔎 Kiểm tra tài khoản', '💸 Rút tiền', '🗂 VA đã tạo'],
       ['ℹ️ Thông tin', '📋 DS rút', '🔄 Cập nhật rút'],
-      ['⚙️ Quản lý', '🔑 Lấy token', '💰 Số dư'],
+      ['⚙️ Quản lý', '💰 Số dư'],
       ['🏧 Chi hộ']
     ]).resize();
   }
@@ -493,7 +493,7 @@ function menuKeyboard(ctx) {
 }
 
 function isMenuText(t) {
-  return t === '🎲 Random tên' || t === '✍️ Nhập tên' || t === '🔑 Lấy token' || t === '💰 Số dư' || t === '🔎 Kiểm tra tài khoản' || t === '💸 Rút tiền' || t === '📋 DS rút' || t === '🔄 Cập nhật rút' || t === '⚙️ Quản lý' || t === '🗂 VA đã tạo' || t === 'ℹ️ Thông tin' || t === 'Đã rút' || t === 'Chưa rút' || t === 'Từ chối' || t === 'Rút ALL' || t === '✅ Xác nhận tạo' || t === '✅ Xác nhận chi hộ' || t === '❌ Hủy' || t === '/menu' || t === '/start' || t === '🏧 Chi hộ' || t === '🏦 MSB' || t === '🏦 KLB' || t === '🏦 BIDV (BẢO TRÌ)';
+  return t === '🎲 Random tên' || t === '✍️ Nhập tên' || t === '💰 Số dư' || t === '🔎 Kiểm tra tài khoản' || t === '💸 Rút tiền' || t === '📋 DS rút' || t === '🔄 Cập nhật rút' || t === '⚙️ Quản lý' || t === '🗂 VA đã tạo' || t === 'ℹ️ Thông tin' || t === 'Đã rút' || t === 'Chưa rút' || t === 'Từ chối' || t === 'Rút ALL' || t === '✅ Xác nhận tạo' || t === '✅ Xác nhận chi hộ' || t === '❌ Hủy' || t === '/menu' || t === '/start' || t === '🏧 Chi hộ' || t === '🏦 MSB' || t === '🏦 KLB' || t === '🏦 BIDV (BẢO TRÌ)';
 }
 
 const app = express();
@@ -627,7 +627,7 @@ app.get('/va/callback', async (req, res) => {
       const uid = rec.userId ? String(rec.userId) : '';
       const smallLimit = 30000;
       const windowMs = 10 * 60 * 1000;
-      const threshold = 3;
+      const threshold = 10;
       if (uid && gross > 0 && gross < smallLimit) {
         const now = Date.now();
         const st = smallTxTracker.get(uid) || { times: [], lastNotify: 0 };
@@ -696,7 +696,6 @@ if (!bot) {
     { command: 'deactive', description: '(Admin) Hủy kích hoạt: /deactive <id>' },
     { command: 'setfee', description: '(Admin) Set phí: /setfee <id|all> <%>' },
     { command: 'setlimit', description: '(Admin) Set giới hạn VA: /setlimit <id> <số>' },
-    { command: 'firmtoken', description: '(Admin) Lấy token chi hộ' },
   ];
 
   async function syncCommandMenuForChat(ctx) {
@@ -921,7 +920,7 @@ if (!bot) {
   });
 
   const MAIN_MENU_CMDS = [
-    '🎲 Random tên', '✍️ Nhập tên', '🔑 Lấy token', '💰 Số dư', '🔎 Kiểm tra tài khoản', 
+    '🎲 Random tên', '✍️ Nhập tên', '💰 Số dư', '🔎 Kiểm tra tài khoản', 
     '💸 Rút tiền', '📋 DS rút', '🔄 Cập nhật rút', '⚙️ Quản lý', '🗂 VA đã tạo', 
     'ℹ️ Thông tin', '🏧 Chi hộ', '/menu', '/start'
   ];
@@ -1242,28 +1241,6 @@ const ibftState = new Map();
     await ctx.reply('Menu:', menuKeyboard(ctx));
   });
 
-  const { getAccessToken } = require('./hpayAuth');
-  bot.hears('🔑 Lấy token', async (ctx) => {
-    if (!isAdminId(ctx.from.id)) {
-      await ctx.reply('Bạn không có quyền dùng chức năng này.', menuKeyboard(ctx));
-      return;
-    }
-    try {
-      const scope = process.env.HPAY_TOKEN_SCOPE || 'va';
-      const r = await getAccessToken(scope);
-      const t = r.access_token || '';
-      if (!t) {
-        await ctx.reply('Không lấy được token. Kiểm tra HPAY_CLIENT_ID/HPAY_CLIENT_SECRET.', menuKeyboard(ctx));
-        return;
-      }
-      await ctx.reply(`Token: ${t}\nHạn: ${r.expires_in || 0}s\nScope: ${scope}`, menuKeyboard(ctx));
-    } catch (e) {
-      const status = e.response?.status;
-      const msg = e.response?.data?.message || e.response?.data?.error || e.message;
-      await ctx.reply(`Lỗi lấy token${status ? ` (${status})` : ''}: ${msg}`, menuKeyboard(ctx));
-    }
-  });
-
   const { getAccountBalance } = require('./hpayClient');
   bot.hears('💰 Số dư', async (ctx) => {
     if (!isAdminId(ctx.from.id)) {
@@ -1292,24 +1269,6 @@ const ibftState = new Map();
     } catch (e) {
       const msg = e.response?.data?.errorMessage || e.message;
       await ctx.reply(`Lỗi lấy số dư: ${msg}`, menuKeyboard(ctx));
-    }
-  });
-
-  bot.command('firmtoken', async (ctx) => {
-    if (!isAdminId(ctx.from.id)) return;
-    try {
-      const scope = process.env.HPAY_FIRM_SCOPE || 'firm';
-      const r = await getAccessToken(scope);
-      const t = r.access_token || '';
-      if (!t) {
-        await ctx.reply('Không lấy được token chi hộ.', menuKeyboard(ctx));
-        return;
-      }
-      await ctx.reply(`Token (firm): ${t}\nHạn: ${r.expires_in || 0}s\nScope: ${scope}`, menuKeyboard(ctx));
-    } catch (e) {
-      const status = e.response?.status;
-      const msg = e.response?.data?.message || e.response?.data?.error || e.message;
-      await ctx.reply(`Lỗi lấy token chi hộ${status ? ` (${status})` : ''}: ${msg}`, menuKeyboard(ctx));
     }
   });
 
