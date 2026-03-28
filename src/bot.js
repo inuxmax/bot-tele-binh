@@ -569,7 +569,16 @@ app.get('/va/callback', async (req, res) => {
       remark: prev.remark,
       createdAt: prev.createdAt,
     });
-    const rec = db.getByRequestId(clientRequestId) || {};
+    let rec = db.getByRequestId(clientRequestId) || {};
+    if (!rec.userId && vaAccount) {
+      try {
+        const all = db.loadAll();
+        const candidates = all
+          .filter((r) => String(r.vaAccount || '') === String(vaAccount))
+          .sort((a, b) => (Number(b.createdAt || 0) || 0) - (Number(a.createdAt || 0) || 0));
+        if (candidates.length) rec = { ...candidates[0], ...rec };
+      } catch (_) {}
+    }
     const gross = toAmountNumber(amount);
     const cfg = db.getConfig();
     let feeFlat = Math.max(0, Number(cfg.ipnFeeFlat || 0) || 0);
@@ -1465,6 +1474,8 @@ const ibftState = new Map();
   });
 
   bot.hears('ℹ️ Thông tin', async (ctx) => {
+    const computed = computeUserBalanceFromRecords(ctx.from.id);
+    db.updateUser(ctx.from.id, { balance: computed.balance });
     const user = db.getUser(ctx.from.id);
     const config = db.getConfig();
     const ipnFeeFlatBase = Math.max(0, Number(config.ipnFeeFlat ?? 0) || 0);
@@ -2423,6 +2434,8 @@ const ibftState = new Map();
 
 
   bot.hears('💸 Rút tiền', async (ctx) => {
+    const computed = computeUserBalanceFromRecords(ctx.from.id);
+    db.updateUser(ctx.from.id, { balance: computed.balance });
     const user = db.getUser(ctx.from.id);
     const saved = getUserWithdrawBanks(ctx.from.id);
     if (saved.length) {
