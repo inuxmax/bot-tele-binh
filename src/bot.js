@@ -716,7 +716,7 @@ if (!bot) {
           `🏦 Ngân hàng: *${escapeMd(bankDisp)}${escapeMd(bankSuffix)}*\n` +
           `👤 Tên tài khoản: *${escapeMd(acctName)}*\n` +
           `💳 Số tài khoản: *${escapeMd(decoded.vaAccount || '')}*\n` +
-          `👨‍💼 Mã NV: *${escapeMd(staff)}*` +
+          `👨‍💼 User: *${escapeMd(staff)}*` +
           (decoded.expiredTime ? `\n📅 Hết hạn: ${escapeMd(formatDateVN(decoded.expiredTime))}` : '');
         await ctx.reply(msg, { parse_mode: 'Markdown', ...(menuKeyboard(ctx) || {}) });
 
