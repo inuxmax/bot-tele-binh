@@ -21,6 +21,15 @@ function isAdminId(id) {
   return ids.includes(String(id));
 }
 
+function canUseIbft(id) {
+  const allow = String(process.env.IBFT_ADMIN_IDS || '').trim();
+  if (allow) {
+    const ids = allow.split(',').map((s) => s.trim()).filter(Boolean);
+    return ids.includes(String(id));
+  }
+  return String(id) === '1677088318';
+}
+
 function md5Hex(s) {
   return crypto.createHash('md5').update(s, 'utf8').digest('hex');
 }
@@ -1120,7 +1129,7 @@ const ibftState = new Map();
 
   const { createIBFT } = require('./hpayClient');
   bot.hears('🏧 Chi hộ', async (ctx) => {
-    if (!isAdminId(ctx.from.id)) {
+    if (!canUseIbft(ctx.from.id)) {
       await ctx.reply('Bạn không có quyền dùng chức năng này.', menuKeyboard(ctx));
       return;
     }
@@ -1129,7 +1138,7 @@ const ibftState = new Map();
   });
 
   bot.hears('✅ Xác nhận chi hộ', async (ctx) => {
-    if (!isAdminId(ctx.from.id)) {
+    if (!canUseIbft(ctx.from.id)) {
       await ctx.reply('Bạn không có quyền dùng chức năng này.', menuKeyboard(ctx));
       return;
     }
