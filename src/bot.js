@@ -220,6 +220,25 @@ async function sendQrFromRaw(ctx, qrRaw) {
   return sendQrImage(ctx, buf);
 }
 
+function buildSepayQrUrl({ acc, bank, amount, des, template }) {
+  const base = 'https://qr.sepay.vn/img';
+  const params = new URLSearchParams();
+  if (acc) params.set('acc', String(acc).trim());
+  if (bank) params.set('bank', String(bank).trim());
+  if (amount !== undefined && amount !== null && String(amount).trim() !== '' && Number(amount) > 0) {
+    params.set('amount', String(Number(amount)));
+  }
+  if (des) params.set('des', String(des).trim());
+  params.set('template', template || 'compact');
+  return `${base}?${params.toString()}`;
+}
+
+function shortenUrl(s, max = 70) {
+  const raw = String(s || '');
+  if (raw.length <= max) return raw;
+  return `${raw.slice(0, max - 3)}...`;
+}
+
 function menuKeyboard(ctx) {
   if (!bot) return null;
   const isAdmin = ctx && ctx.from && isAdminId(ctx.from.id);
@@ -498,17 +517,40 @@ if (!bot) {
           quickLink: decoded.quickLink,
           qrCode: decoded.qrCode,
         });
+        const sepayUrl = buildSepayQrUrl({
+          acc: decoded.vaAccount,
+          bank: String(decoded.vaBank || bankCode || '').trim().toUpperCase(),
+          amount: decoded.vaAmount,
+          des: decoded.remark || remark,
+          template: 'compact',
+        });
+
+        let sentQr = false;
         try {
-          const qrRaw = String(decoded.qrCode || decoded.quickLink || '').trim();
-          if (qrRaw) {
-            const ok = await sendQrFromRaw(ctx, qrRaw);
-            if (!ok) await ctx.reply('Không gửi được QR.', menuKeyboard(ctx));
+          const res = await axios.get(sepayUrl, {
+            responseType: 'arraybuffer',
+            timeout: 20000,
+            maxContentLength: 12 * 1024 * 1024,
+            headers: { 'User-Agent': 'bot-tele-binh' },
+            validateStatus: (s) => s >= 200 && s < 400,
+          });
+          const ct = String(res.headers?.['content-type'] || '').toLowerCase();
+          const buf = Buffer.from(res.data || []);
+          if (buf.length > 200 && (ct.startsWith('image/') || sniffImageBuffer(buf))) {
+            sentQr = await sendQrImage(ctx, buf);
           }
-        } catch (_) {
+        } catch (_) {}
+
+        if (!sentQr) {
           try {
-            await ctx.reply('Không gửi được QR.', menuKeyboard(ctx));
+            const qrRaw = String(decoded.qrCode || decoded.quickLink || '').trim();
+            if (qrRaw) sentQr = await sendQrFromRaw(ctx, qrRaw);
           } catch (_) {}
         }
+
+        try {
+          await ctx.reply(`QR URL: ${shortenUrl(sepayUrl)}\nMở QR: ${sepayUrl}`, menuKeyboard(ctx));
+        } catch (_) {}
       } else {
         await ctx.reply(`Tạo VA không thành công.\nMã lỗi: ${raw.errorCode || 'N/A'}\nThông tin: ${raw.errorMessage || 'N/A'}`, menuKeyboard(ctx));
       }
