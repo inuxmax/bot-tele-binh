@@ -1,6 +1,7 @@
 require('dotenv').config();
 const { Telegraf, Markup } = require('telegraf');
 const crypto = require('crypto');
+const axios = require('axios');
 const express = require('express');
 const db = require('./db');
 const { createVirtualAccount } = require('./hpayClient');
@@ -402,7 +403,7 @@ if (!bot) {
           .slice(0, 60);
 
         const out = [];
-        out.push('✅ Tạo Virtual Account thành công (RUT)');
+        out.push('✅ Tạo Virtual Account thành công');
         out.push('');
         if (displayVaBank(decoded, bankCode)) out.push(`🏦 Ngân hàng: ${displayVaBank(decoded, bankCode)}`);
         if (acctName) out.push(`👤 Tên tài khoản: ${acctName}`);
@@ -427,19 +428,32 @@ if (!bot) {
           quickLink: decoded.quickLink,
           qrCode: decoded.qrCode,
         });
-        const qrRaw = String(decoded.qrCode || decoded.quickLink || '').trim();
-        if (qrRaw) {
-          const lower = qrRaw.toLowerCase();
-          if (lower.startsWith('http://') || lower.startsWith('https://')) {
-            await ctx.replyWithPhoto({ url: qrRaw }, menuKeyboard(ctx));
-          } else if (lower.startsWith('data:image/')) {
-            const b64 = qrRaw.split(',')[1] || '';
-            const buf = Buffer.from(b64, 'base64');
-            if (buf.length) await ctx.replyWithPhoto({ source: buf }, menuKeyboard(ctx));
-          } else {
-            const buf = Buffer.from(qrRaw, 'base64');
-            if (buf.length) await ctx.replyWithPhoto({ source: buf }, menuKeyboard(ctx));
+        try {
+          const qrRaw = String(decoded.qrCode || decoded.quickLink || '').trim();
+          if (qrRaw) {
+            const lower = qrRaw.toLowerCase();
+            if (lower.startsWith('data:image/')) {
+              const b64 = qrRaw.split(',')[1] || '';
+              const buf = Buffer.from(b64, 'base64');
+              if (buf.length) await ctx.replyWithPhoto({ source: buf }, menuKeyboard(ctx));
+            } else if (lower.startsWith('http://') || lower.startsWith('https://')) {
+              const res = await axios.get(qrRaw, { responseType: 'arraybuffer', timeout: 15000, maxContentLength: 8 * 1024 * 1024 });
+              const ct = String(res.headers?.['content-type'] || '').toLowerCase();
+              const buf = Buffer.from(res.data || []);
+              if (buf.length && ct.startsWith('image/')) {
+                await ctx.replyWithPhoto({ source: buf }, menuKeyboard(ctx));
+              } else {
+                await ctx.reply('Không gửi được QR.', menuKeyboard(ctx));
+              }
+            } else {
+              const buf = Buffer.from(qrRaw, 'base64');
+              if (buf.length) await ctx.replyWithPhoto({ source: buf }, menuKeyboard(ctx));
+            }
           }
+        } catch (_) {
+          try {
+            await ctx.reply('Không gửi được QR.', menuKeyboard(ctx));
+          } catch (_) {}
         }
       } else {
         await ctx.reply(`Tạo VA không thành công.\nMã lỗi: ${raw.errorCode || 'N/A'}\nThông tin: ${raw.errorMessage || 'N/A'}`, menuKeyboard(ctx));
