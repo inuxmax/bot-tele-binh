@@ -7,11 +7,64 @@ const DATA_FILE = path.join(DATA_DIR, 'va_records.enc');
 const WD_FILE = path.join(DATA_DIR, 'withdrawals.enc');
 const USERS_FILE = path.join(DATA_DIR, 'users.enc');
 const CONFIG_FILE = path.join(DATA_DIR, 'config.enc');
+const KEY_FILE = path.join(DATA_DIR, 'db.key');
 
-// Lấy secret key từ môi trường hoặc sinh một chuỗi mặc định (để dev)
-const ENCRYPTION_KEY = process.env.DB_ENCRYPTION_KEY 
-  ? crypto.createHash('sha256').update(String(process.env.DB_ENCRYPTION_KEY)).digest('base64').substr(0, 32)
-  : crypto.createHash('sha256').update('DEFAULT_BOT_SECRET_KEY_123').digest('base64').substr(0, 32);
+function deriveKey(secret) {
+  return crypto.createHash('sha256').update(String(secret)).digest('base64').substr(0, 32);
+}
+
+function readKeyFile() {
+  try {
+    if (!fs.existsSync(KEY_FILE)) return '';
+    return String(fs.readFileSync(KEY_FILE, 'utf8') || '').trim();
+  } catch (_) {
+    return '';
+  }
+}
+
+function writeKeyFile(secret) {
+  try {
+    if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+    fs.writeFileSync(KEY_FILE, String(secret || '').trim(), 'utf8');
+  } catch (_) {}
+}
+
+function shouldAssumeExistingStore() {
+  try {
+    return fs.existsSync(USERS_FILE) || fs.existsSync(DATA_FILE) || fs.existsSync(WD_FILE) || fs.existsSync(CONFIG_FILE);
+  } catch (_) {
+    return false;
+  }
+}
+
+function selectEncryptionSecret() {
+  const envSecret = String(process.env.DB_ENCRYPTION_KEY || '').trim();
+  if (envSecret) return envSecret;
+  const fileSecret = readKeyFile();
+  if (fileSecret) return fileSecret;
+  if (shouldAssumeExistingStore()) return 'DEFAULT_BOT_SECRET_KEY_123';
+  const generated = crypto.randomBytes(32).toString('hex');
+  writeKeyFile(generated);
+  return generated;
+}
+
+const ENCRYPTION_SECRET = selectEncryptionSecret();
+if (!String(process.env.DB_ENCRYPTION_KEY || '').trim()) {
+  const fileSecret = readKeyFile();
+  if (!fileSecret) writeKeyFile(ENCRYPTION_SECRET);
+}
+
+const ENCRYPTION_KEY = deriveKey(ENCRYPTION_SECRET);
+
+function getDecryptKeys() {
+  const keys = [];
+  const envSecret = String(process.env.DB_ENCRYPTION_KEY || '').trim();
+  const fileSecret = readKeyFile();
+  if (envSecret) keys.push(deriveKey(envSecret));
+  if (fileSecret) keys.push(deriveKey(fileSecret));
+  keys.push(deriveKey('DEFAULT_BOT_SECRET_KEY_123'));
+  return Array.from(new Set(keys));
+}
 
 const IV_LENGTH = 16;
 
@@ -23,12 +76,12 @@ function encrypt(text) {
   return iv.toString('hex') + ':' + encrypted.toString('hex');
 }
 
-function decrypt(text) {
+function decryptWithKey(text, key) {
   try {
     const textParts = text.split(':');
     const iv = Buffer.from(textParts.shift(), 'hex');
     const encryptedText = Buffer.from(textParts.join(':'), 'hex');
-    const decipher = crypto.createDecipheriv('aes-256-cbc', Buffer.from(ENCRYPTION_KEY), iv);
+    const decipher = crypto.createDecipheriv('aes-256-cbc', Buffer.from(key), iv);
     let decrypted = decipher.update(encryptedText);
     decrypted = Buffer.concat([decrypted, decipher.final()]);
     return decrypted.toString();
@@ -45,9 +98,14 @@ function readEncryptedFile(filePath, defaultData) {
       // Migrate from unencrypted json (if any legacy data exists)
       return JSON.parse(encData);
     }
-    const decData = decrypt(encData);
-    if (!decData) return defaultData;
-    return JSON.parse(decData);
+    for (const key of getDecryptKeys()) {
+      const decData = decryptWithKey(encData, key);
+      if (!decData) continue;
+      try {
+        return JSON.parse(decData);
+      } catch (_) {}
+    }
+    return defaultData;
   } catch (_) {
     return defaultData;
   }
@@ -56,16 +114,23 @@ function readEncryptedFile(filePath, defaultData) {
 function writeEncryptedFile(filePath, data) {
   const text = JSON.stringify(data);
   const encData = encrypt(text);
-  fs.writeFileSync(filePath, encData, 'utf8');
+  const dir = path.dirname(filePath);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  const tmp = `${filePath}.${Date.now()}.tmp`;
+  fs.writeFileSync(tmp, encData, 'utf8');
+  fs.renameSync(tmp, filePath);
 }
 
 function ensureStore() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+  if (!fs.existsSync(KEY_FILE)) writeKeyFile(ENCRYPTION_SECRET);
   if (!fs.existsSync(DATA_FILE)) writeEncryptedFile(DATA_FILE, []);
   if (!fs.existsSync(WD_FILE)) writeEncryptedFile(WD_FILE, []);
   if (!fs.existsSync(USERS_FILE)) writeEncryptedFile(USERS_FILE, {});
   if (!fs.existsSync(CONFIG_FILE)) writeEncryptedFile(CONFIG_FILE, { globalFeePercent: 0 });
 }
+
+ensureStore();
 
 function loadAll() {
   return readEncryptedFile(DATA_FILE, []);
