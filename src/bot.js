@@ -1262,7 +1262,8 @@ const ibftState = new Map();
       `/setfee <id> <%> : Set % phí cho user\n` +
       `/setfee all <%> : Set % phí chung\n` +
       `/setlimit <id> <số> : Set giới hạn VA cho user\n` +
-      `/users : Xem danh sách user`;
+      `/users : Xem danh sách user\n` +
+      `/admins : Xem danh sách admin`;
     await ctx.reply(msg, menuKeyboard(ctx));
   });
 
@@ -1314,6 +1315,22 @@ const ibftState = new Map();
     if (users.length === 0) return ctx.reply('Chưa có user nào.');
     const lines = users.map(u => `${u.id} | ${u.isActive?'Active':'Inactive'} | Dư: ${u.balance.toLocaleString()}đ | VA: ${u.createdVA}/${u.vaLimit!==null?u.vaLimit:'∞'} | Phí: ${u.feePercent!==null?u.feePercent+'%':'chung'}`).join('\n');
     await ctx.reply(`Danh sách User:\n${lines}`);
+  });
+
+  bot.command('admins', async (ctx) => {
+    if (!isAdminId(ctx.from.id)) return;
+    const adminIds = String(process.env.ADMIN_IDS || '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const ibftIds = String(process.env.IBFT_ADMIN_IDS || '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const lines = [];
+    lines.push(`ADMIN_IDS: ${adminIds.length ? adminIds.join(', ') : '(trống)'}`);
+    lines.push(`IBFT_ADMIN_IDS: ${ibftIds.length ? ibftIds.join(', ') : '(trống)'}`);
+    await ctx.reply(lines.join('\n'), menuKeyboard(ctx));
   });
 
 
