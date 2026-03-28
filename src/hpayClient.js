@@ -121,11 +121,13 @@ async function createVirtualAccount({ requestId, vaName, vaType = '1', vaConditi
   return { raw: resData, decoded, requestId: payload.requestId };
 }
 
-async function getAccountBalance({ requestId } = {}) {
+async function getAccountBalance({ requestId, merchantIdOverride, passcodeOverride, clientIdOverride, clientSecretOverride, xApiMidOverride } = {}) {
   const baseUrl = process.env.HPAY_BASE_URL || 'https://openapi-sandbox.htpgroup.com.vn';
   const url = `${baseUrl}/service/account/v1/get-balance`;
-  const merchantId = process.env.HPAY_MERCHANT_ID || '';
-  const passcode = process.env.HPAY_PASSCODE || '';
+  const merchantId = merchantIdOverride || process.env.HPAY_MERCHANT_ID || '';
+  const passcode = passcodeOverride || process.env.HPAY_PASSCODE || '';
+  const midForHeader =
+    (xApiMidOverride || '').trim() || String(merchantIdOverride || '').trim() || (process.env.HPAY_X_API_MID || '').trim() || String(process.env.HPAY_MERCHANT_ID || '').trim();
   const privateKey = readPrivateKey();
   if (!privateKey) {
     throw new Error('Không tìm thấy private key: cấu hình HPAY_PRIVATE_KEY_B64 hoặc HPAY_PRIVATE_KEY (một dòng với \\n) hoặc HPAY_PRIVATE_KEY_FILE');
@@ -151,17 +153,21 @@ async function getAccountBalance({ requestId } = {}) {
   // Luôn dùng token theo scope 'account' để tránh dùng nhầm token 'va' từ .env
   let authHeader = '';
   try {
-    const tokenResp = await getAccessToken('account');
+    const tokenResp = await getAccessToken('account', {
+      clientId: clientIdOverride,
+      clientSecret: clientSecretOverride,
+      mid: midForHeader,
+    });
     if (tokenResp && tokenResp.access_token) {
       authHeader = `Bearer ${tokenResp.access_token}`;
     }
-  } catch (_) {}
-  // Fallback (ít khả năng cần) nếu lấy token thất bại
-  if (!authHeader) {
-    const rawAuth = process.env.HPAY_AUTH_TOKEN || '';
-    authHeader = rawAuth.toLowerCase().startsWith('bearer ') ? rawAuth : rawAuth ? `Bearer ${rawAuth}` : '';
+  } catch (e) {
+    const status = e?.response?.status;
+    const msg = e?.response?.data?.error_description || e?.response?.data?.error || e.message;
+    throw new Error(`Lỗi lấy token Account${status ? ` (${status})` : ''}: ${msg}`);
   }
-  const headers = buildHeaders(authHeader);
+  if (!authHeader) throw new Error('Không lấy được token Account. Kiểm tra HPAY_CLIENT_ID/HPAY_CLIENT_SECRET và HPAY_X_API_MID.');
+  const headers = buildHeaders(authHeader, midForHeader);
   const body = { data, signature };
   const res = await axios.post(url, body, { headers, timeout: 20000 });
   const resData = res.data || {};

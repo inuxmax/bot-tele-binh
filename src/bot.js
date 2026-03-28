@@ -25,6 +25,47 @@ function md5Hex(s) {
   return crypto.createHash('md5').update(s, 'utf8').digest('hex');
 }
 
+function escapeMd(s) {
+  return String(s || '').replace(/([_*`\[])/g, '\\$1');
+}
+
+function toAmountNumber(v) {
+  const n = Number(String(v || '').replace(/[^\d]/g, ''));
+  return Number.isFinite(n) ? n : 0;
+}
+
+function formatDateTimeVN(input) {
+  const raw = String(input || '').trim();
+  if (!raw) return '';
+  const num = Number(raw);
+  if (Number.isFinite(num) && num > 0) {
+    const ms = raw.length >= 13 ? num : num * 1000;
+    const d = new Date(ms);
+    if (!Number.isNaN(d.getTime())) {
+      const time = new Intl.DateTimeFormat('en-GB', {
+        timeZone: 'Asia/Ho_Chi_Minh',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false,
+      }).format(d);
+      const date = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Ho_Chi_Minh', day: '2-digit', month: '2-digit', year: 'numeric' }).format(d);
+      return `${time}, ${date}`;
+    }
+  }
+  return raw;
+}
+
+function computeUserBalanceFromRecords(userId) {
+  const uid = String(userId);
+  const vas = db.loadAll().filter((r) => String(r.userId) === uid && String(r.status) === 'paid');
+  const totalPaid = vas.reduce((sum, r) => sum + toAmountNumber(r.netAmount || r.amount || r.vaAmount), 0);
+  const wds = db.loadWithdrawals().filter((w) => String(w.userId) === uid && String(w.status) !== 'reject');
+  const totalWithdraw = wds.reduce((sum, w) => sum + toAmountNumber(w.amount), 0);
+  const balance = Math.max(0, totalPaid - totalWithdraw);
+  return { totalPaid, totalWithdraw, balance };
+}
+
 const IBFT_BANKS = [
   { code: 'ABB', name: 'ABBank' },
   { code: 'ACB', name: 'ACB' },
@@ -390,7 +431,12 @@ app.get('/va/callback', async (req, res) => {
   const clientRequestId = String(q.client_request_id || '');
   const merchantId = String(q.merchant_id || '');
   const secureCode = String(q.secure_code || '').toLowerCase();
-  const passcode = process.env.HPAY_PASSCODE || '';
+  const passcode =
+    (merchantId && merchantId === String(process.env.HPAY_MERCHANT_ID_MSB || '').trim()
+      ? String(process.env.HPAY_PASSCODE_MSB || '').trim()
+      : merchantId && merchantId === String(process.env.HPAY_MERCHANT_ID_KLB || '').trim()
+        ? String(process.env.HPAY_PASSCODE_KLB || '').trim()
+        : String(process.env.HPAY_PASSCODE || '').trim()) || '';
 
   const clear = `${vaAccount}|${amount}|${cashinId}|${transactionId}|${passcode}|${clientRequestId}|${merchantId}`;
   const expected = md5Hex(clear);
@@ -403,26 +449,9 @@ app.get('/va/callback', async (req, res) => {
   } catch (_) {}
 
   if (bot && ok) {
-    const chatId = requestToChat.get(clientRequestId);
-    if (chatId) {
-      const timePaid = String(q.time_paid || '');
-      const bank = String(q.va_bank_name || '');
-      const orderId = String(q.order_id || '');
-      const msg =
-        `Thanh toán thành công\n` +
-        `VA: ${vaAccount}\n` +
-        `Số tiền: ${amount}\n` +
-        `Ngân hàng: ${bank}\n` +
-        `Order: ${orderId}\n` +
-        `Transaction: ${transactionId}\n` +
-        `CASHIN: ${cashinId}\n` +
-        `TimePaid: ${timePaid}` +
-        (transferContent ? `\nNội dung: ${transferContent}` : '');
-      try {
-        await bot.telegram.sendMessage(chatId, msg);
-      } catch (_) {}
-      requestToChat.delete(clientRequestId);
-    }
+    const timePaid = String(q.time_paid || '');
+    const bank = String(q.va_bank_name || '');
+    const orderId = String(q.order_id || '');
     const prev = requestStatus.get(clientRequestId) || {};
     requestStatus.set(clientRequestId, {
       status: 'paid',
@@ -437,24 +466,62 @@ app.get('/va/callback', async (req, res) => {
       createdAt: prev.createdAt,
     });
     const rec = db.getByRequestId(clientRequestId) || {};
-    if (rec.status !== 'paid') {
+    const gross = toAmountNumber(amount);
+    let credited = gross;
+    let feePercent = null;
+    let creditedStr = credited.toLocaleString();
+    let grossStr = gross.toLocaleString();
+    try {
       if (rec.userId) {
         const u = db.getUser(rec.userId);
-        db.updateUser(rec.userId, { balance: u.balance + Number(amount || 0) });
+        const cfg = db.getConfig();
+        feePercent = u.feePercent !== null ? u.feePercent : cfg.globalFeePercent;
+        credited = Math.max(0, Math.floor(gross - (gross * Number(feePercent || 0)) / 100));
+        creditedStr = credited.toLocaleString();
       }
+    } catch (_) {}
+
+    if (rec.status !== 'paid' && rec.userId) {
+      const u = db.getUser(rec.userId);
+      db.updateUser(rec.userId, { balance: u.balance + credited });
     }
     db.upsert({
       ...rec,
       requestId: clientRequestId,
       status: 'paid',
       vaAccount,
-      amount,
+      amount: String(gross),
+      netAmount: String(credited),
+      feePercent,
       vaBank: String(q.va_bank_name || ''),
       orderId: String(q.order_id || ''),
       transactionId,
       cashinId,
       timePaid: String(q.time_paid || ''),
+      transferContent: transferContent || rec.transferContent,
     });
+
+    const targetUserId = rec.userId ? Number(rec.userId) : null;
+    const chatId = requestToChat.get(clientRequestId);
+    const target = Number.isFinite(targetUserId) ? targetUserId : chatId;
+    if (target) {
+      const owner = String(rec.name || rec.customerName || '').trim().toUpperCase();
+      const content = transferContent || String(rec.remark || prev.remark || '').trim();
+      try {
+        const header = `🔔 *TIỀN VỀ TIỀN VỀ*`;
+        const amountLine = `💵 Số tiền: *${grossStr} đ*`;
+        const bankLine = bank ? `🏦 ${escapeMd(bank)}` : '';
+        const timeLine = timePaid ? ` • Thời Gian: ${escapeMd(formatDateTimeVN(timePaid))}` : '';
+        const txLine = transactionId ? ` • Transaction: ${escapeMd(transactionId)}` : '';
+        const nameLine = owner ? ` • Họ Tên: ${escapeMd(owner)}` : '';
+        const accLine = vaAccount ? ` • Số TK: ${escapeMd(vaAccount)}` : '';
+        const netLine =
+          feePercent !== null ? `✅ Thực nhận: +${creditedStr} đ (Đã trừ phí ${feePercent}%)` : `✅ Thực nhận: +${creditedStr} đ`;
+        const msgLines = [header, '', amountLine, netLine, '', bankLine, nameLine, accLine, timeLine, txLine].filter(Boolean);
+        await bot.telegram.sendMessage(target, msgLines.join('\n'), { parse_mode: 'Markdown' });
+      } catch (_) {}
+      requestToChat.delete(clientRequestId);
+    }
   }
 
   res.status(200).json({ error: ok ? '00' : '01', message: ok ? 'Success' : 'Invalid secure_code' });
@@ -642,15 +709,15 @@ if (!bot) {
           .toUpperCase()
           .slice(0, 60);
 
-        const out = [];
-        out.push('✅ Tạo Virtual Account thành công');
-        out.push('');
-        if (displayVaBank(decoded, bankCode)) out.push(`🏦 Ngân hàng: ${displayVaBank(decoded, bankCode)}`);
-        if (acctName) out.push(`👤 Tên tài khoản: ${acctName}`);
-        if (decoded.vaAccount) out.push(`💳 Số tài khoản: ${decoded.vaAccount}`);
-        if (staff) out.push(`👨‍💼 Mã NV: ${staff}`);
-        if (decoded.expiredTime) out.push(`📅 Hết hạn: ${formatDateVN(decoded.expiredTime)}`);
-        await ctx.reply(out.join('\n'), menuKeyboard(ctx));
+        const bankDisp = displayVaBank(decoded, bankCode);
+        const msg =
+          `*Tạo Virtual Account thành công*\n\n` +
+          `Ngân hàng: *${escapeMd(bankDisp)}*\n` +
+          `Tên tài khoản: *${escapeMd(acctName)}*\n` +
+          `Số tài khoản: *${escapeMd(decoded.vaAccount || '')}*\n` +
+          `Mã NV: *${escapeMd(staff)}*` +
+          (decoded.expiredTime ? `\nHết hạn: ${escapeMd(formatDateVN(decoded.expiredTime))}` : '');
+        await ctx.reply(msg, { parse_mode: 'Markdown', ...(menuKeyboard(ctx) || {}) });
 
         const s = requestStatus.get(requestId) || baseStatus;
         requestStatus.set(requestId, { ...s, vaAccount: decoded.vaAccount, vaBank: decoded.vaBank, amount: decoded.vaAmount });
@@ -1003,16 +1070,38 @@ const ibftState = new Map();
     }
     try {
       await ctx.reply('Đang kiểm tra số dư...', menuKeyboard(ctx));
-      const { decoded, raw } = await getAccountBalance({});
-      if (decoded) {
-        const lines = [];
-        if (decoded.merchantId) lines.push(`Merchant: ${decoded.merchantId}`);
-        if (decoded.merchantEmail) lines.push(`Email: ${decoded.merchantEmail}`);
-        if (decoded.balance) lines.push(`Số dư: ${decoded.balance}`);
-        await ctx.reply(lines.join('\n'), menuKeyboard(ctx));
-      } else {
-        await ctx.reply(`Không lấy được số dư.\nMã lỗi: ${raw.errorCode || 'N/A'}\nThông tin: ${raw.errorMessage || 'N/A'}`, menuKeyboard(ctx));
+      const parts = [];
+      let sum = 0;
+
+      const msb = {
+        merchantIdOverride: (process.env.HPAY_MERCHANT_ID_MSB || '').trim() || undefined,
+        passcodeOverride: (process.env.HPAY_PASSCODE_MSB || '').trim() || undefined,
+        clientIdOverride: (process.env.HPAY_CLIENT_ID_MSB || '').trim() || undefined,
+        clientSecretOverride: (process.env.HPAY_CLIENT_SECRET_MSB || '').trim() || undefined,
+        xApiMidOverride: (process.env.HPAY_X_API_MID_MSB || '').trim() || undefined,
+      };
+      const klb = {
+        merchantIdOverride: (process.env.HPAY_MERCHANT_ID_KLB || '').trim() || undefined,
+        passcodeOverride: (process.env.HPAY_PASSCODE_KLB || '').trim() || undefined,
+        clientIdOverride: (process.env.HPAY_CLIENT_ID_KLB || '').trim() || undefined,
+        clientSecretOverride: (process.env.HPAY_CLIENT_SECRET_KLB || '').trim() || undefined,
+        xApiMidOverride: (process.env.HPAY_X_API_MID_KLB || '').trim() || undefined,
+      };
+
+      const targets = [];
+      if (msb.merchantIdOverride && msb.passcodeOverride && msb.clientIdOverride && msb.clientSecretOverride) targets.push({ label: 'MSB', cfg: msb });
+      if (klb.merchantIdOverride && klb.passcodeOverride && klb.clientIdOverride && klb.clientSecretOverride) targets.push({ label: 'KLB', cfg: klb });
+      if (!targets.length) targets.push({ label: 'DEFAULT', cfg: {} });
+
+      for (const t of targets) {
+        const { decoded } = await getAccountBalance(t.cfg);
+        const balStr = String(decoded?.balance || '').trim();
+        const balNum = toAmountNumber(balStr);
+        sum += balNum;
+        parts.push(`${t.label}: ${balStr || balNum.toLocaleString()}`);
       }
+      db.updateUser(ctx.from.id, { balance: sum });
+      await ctx.reply(parts.join('\n') + `\nTổng: ${sum.toLocaleString()}đ`, menuKeyboard(ctx));
     } catch (e) {
       const msg = e.response?.data?.errorMessage || e.message;
       await ctx.reply(`Lỗi lấy số dư: ${msg}`, menuKeyboard(ctx));
@@ -1065,12 +1154,6 @@ const ibftState = new Map();
     }
 
     try {
-      const u = db.getUser(ctx.from.id);
-      if (amount > u.balance) {
-        ibftState.delete(ctx.from.id);
-        await ctx.reply(`Số dư không đủ. Bạn đang có ${u.balance.toLocaleString()}đ`, menuKeyboard(ctx));
-        return;
-      }
       const remark = st.remark || `CH ${Date.now().toString().slice(-8)}`;
       const callbackUrl = (process.env.IBFT_CALLBACK_URL || '').trim();
 
@@ -1108,11 +1191,6 @@ const ibftState = new Map();
         xApiMidOverride,
       });
 
-      const ok = (decoded && decoded.orderId) || (!raw?.errorCode || raw?.errorCode === '00');
-      if (ok) {
-        db.updateUser(ctx.from.id, { balance: u.balance - amount });
-      }
-
       ibftState.delete(ctx.from.id);
       const lines = [];
       if (decoded && typeof decoded === 'object') {
@@ -1131,6 +1209,8 @@ const ibftState = new Map();
   });
 
   bot.hears('ℹ️ Thông tin', async (ctx) => {
+    const computed = computeUserBalanceFromRecords(ctx.from.id);
+    db.updateUser(ctx.from.id, { balance: computed.balance });
     const user = db.getUser(ctx.from.id);
     const config = db.getConfig();
     const feePercent = user.feePercent !== null ? user.feePercent : config.globalFeePercent;
@@ -1138,7 +1218,7 @@ const ibftState = new Map();
     const msg = `ℹ️ THÔNG TIN TÀI KHOẢN\n\n` +
       `👤 ID: \`${user.id}\`\n` +
       `💰 Tổng số dư: ${user.balance.toLocaleString()}đ\n` +
-      `📉 Phí rút tiền: ${feePercent}%\n` +
+      `📉 Phí dịch vụ: ${feePercent}% (trừ khi tiền về)\n` +
       `📊 Tổng số VA đã tạo: ${user.createdVA}\n` +
       `🚫 Giới hạn tạo VA: ${user.vaLimit !== null ? user.vaLimit : 'Không giới hạn'}`;
       
@@ -1540,11 +1620,6 @@ const ibftState = new Map();
           await ctx.reply('Số tiền không hợp lệ. Nhập lại:', Markup.keyboard([['❌ Hủy']]).resize());
           return;
         }
-        const u = db.getUser(ctx.from.id);
-        if (amount > u.balance) {
-          await ctx.reply(`Số dư không đủ. Bạn đang có ${u.balance.toLocaleString()}đ`, menuKeyboard(ctx));
-          return;
-        }
 
         const rand = crypto.randomBytes(4).toString('hex').toUpperCase();
         const remark = `CH ${String(amount).slice(-4)} ${rand}`.slice(0, 50);
@@ -1631,10 +1706,6 @@ const ibftState = new Map();
           return;
         }
         
-        const config = db.getConfig();
-        const feePercent = user.feePercent !== null ? user.feePercent : config.globalFeePercent;
-        const actualReceive = amount - (amount * feePercent / 100);
-
         db.updateUser(ctx.from.id, { balance: user.balance - amount });
 
         const id = `WD${Date.now().toString().slice(-10)}${Math.floor(100000 + Math.random() * 900000)}`;
@@ -1649,8 +1720,8 @@ const ibftState = new Map();
           network: wst.network,
           wallet: wst.wallet,
           amount,
-          feePercent,
-          actualReceive,
+          feePercent: 0,
+          actualReceive: amount,
           createdAt: Date.now(),
           status: 'pending',
         };
@@ -1661,7 +1732,7 @@ const ibftState = new Map();
           (rec.method === 'bank'
             ? `Ngân hàng: ${rec.bankName}\nSTK: ${rec.bankAccount}\nChủ TK: ${rec.bankHolder}\n`
             : `Network: ${rec.network}\nVí: ${rec.wallet}\n`) +
-          `Số dư bị trừ: ${amount.toLocaleString()}đ\nPhí rút: ${feePercent}%\nThực nhận: ${actualReceive.toLocaleString()}đ\nTrạng thái: pending`,
+          `Số dư bị trừ: ${amount.toLocaleString()}đ\nTrạng thái: pending`,
           menuKeyboard(ctx)
         );
         const adminRaw = process.env.ADMIN_IDS || '';
@@ -1674,7 +1745,7 @@ const ibftState = new Map();
               (rec.method === 'bank'
                 ? `Ngân hàng: ${rec.bankName}\nSTK: ${rec.bankAccount}\nChủ TK: ${rec.bankHolder}\n`
                 : `Network: ${rec.network}\nVí: ${rec.wallet}\n`) +
-              `Số tiền trừ: ${amount.toLocaleString()}đ\nThực nhận: ${actualReceive.toLocaleString()}đ`
+              `Số tiền trừ: ${amount.toLocaleString()}đ`
             );
           } catch (_) {}
         }
