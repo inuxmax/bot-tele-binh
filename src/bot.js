@@ -24,13 +24,138 @@ function md5Hex(s) {
   return crypto.createHash('md5').update(s, 'utf8').digest('hex');
 }
 
+const IBFT_BANKS = [
+  { code: 'ABB', name: 'ABBank' },
+  { code: 'ACB', name: 'ACB' },
+  { code: 'AGB', name: 'Agribank' },
+  { code: 'BAB', name: 'Bac A Bank' },
+  { code: 'BIDV', name: 'BIDV' },
+  { code: 'BVB', name: 'BaoViet Bank' },
+  { code: 'CAKEVPB', name: 'CAKE by VPBank' },
+  { code: 'CBB', name: 'CBBank' },
+  { code: 'CIMB', name: 'CIMB Bank' },
+  { code: 'COOPBANK', name: 'Co-opBank' },
+  { code: 'CTB', name: 'CitiBank' },
+  { code: 'DAB', name: 'DongA Bank' },
+  { code: 'DBS', name: 'DBS Bank' },
+  { code: 'EXB', name: 'Eximbank' },
+  { code: 'GPB', name: 'GPBank' },
+  { code: 'HDB', name: 'HDBank' },
+  { code: 'HONLEONGBANK', name: 'Hong Leong Bank' },
+  { code: 'HSBC', name: 'HSBC' },
+  { code: 'IBKHCM', name: 'IBK HCM' },
+  { code: 'IBKHN', name: 'IBK Ha Noi' },
+  { code: 'ICB', name: 'VietinBank' },
+  { code: 'IVB', name: 'Indovina Bank' },
+  { code: 'KASIKORNBANK', name: 'Kasikornbank' },
+  { code: 'KEBHANAHCM', name: 'KEB Hana HCM' },
+  { code: 'KEBHANAHN', name: 'KEB Hana Ha Noi' },
+  { code: 'KLB', name: 'KienLongBank' },
+  { code: 'KOOKMINHCM', name: 'Kookmin HCM' },
+  { code: 'KOOKMINHN', name: 'Kookmin Ha Noi' },
+  { code: 'LIOBANK', name: 'Liobank' },
+  { code: 'LVB', name: 'LPBank' },
+  { code: 'MAFC', name: 'Mirae Asset Finance' },
+  { code: 'MB', name: 'MBBank' },
+  { code: 'MSB', name: 'MSB' },
+  { code: 'NAB', name: 'Nam A Bank' },
+  { code: 'NONGHYUPBANK', name: 'Nonghyup Bank' },
+  { code: 'NVB', name: 'NCB' },
+  { code: 'OCB', name: 'OCB' },
+  { code: 'OJB', name: 'OceanBank' },
+  { code: 'PBVN', name: 'Public Bank' },
+  { code: 'PGB', name: 'PG Bank' },
+  { code: 'PVCB', name: 'PVcomBank' },
+  { code: 'SC', name: 'Standard Chartered' },
+  { code: 'SCB', name: 'SCB' },
+  { code: 'SEA', name: 'SeABank' },
+  { code: 'SGB', name: 'Saigonbank' },
+  { code: 'SHB', name: 'SHB' },
+  { code: 'SHNB', name: 'Shinhan Bank' },
+  { code: 'STB', name: 'Sacombank' },
+  { code: 'TCB', name: 'Techcombank' },
+  { code: 'TIMOB', name: 'Timo by Ban Viet Bank' },
+  { code: 'TPB', name: 'TPBank' },
+  { code: 'UBANKVPB', name: 'Ubank by VPBank' },
+  { code: 'UMEEKLB', name: 'UMEE by KienLongBank' },
+  { code: 'UOB', name: 'UOB' },
+  { code: 'VAB', name: 'VietABank' },
+  { code: 'VB', name: 'VietBank' },
+  { code: 'VCB', name: 'Vietcombank' },
+  { code: 'VCCB', name: 'BVBank' },
+  { code: 'VIB', name: 'VIB' },
+  { code: 'VIETELMONEY', name: 'Viettel Money' },
+  { code: 'VNPTMONEY', name: 'VNPT Money' },
+  { code: 'VNSPB', name: 'VBSP' },
+  { code: 'VPB', name: 'VPBank' },
+  { code: 'VRB', name: 'VRB' },
+  { code: 'WRB', name: 'Woori Bank' },
+];
+
+function normalizeSearch(s) {
+  return String(s || '')
+    .trim()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '');
+}
+
+function findIbftBanks(query, limit = 8) {
+  const q = normalizeSearch(query);
+  if (!q) return [];
+  const scored = [];
+  for (const b of IBFT_BANKS) {
+    const c = normalizeSearch(b.code);
+    const n = normalizeSearch(b.name);
+    let score = -1;
+    if (c === q) score = 100;
+    else if (c.startsWith(q)) score = 80;
+    else if (c.includes(q)) score = 60;
+    else if (n.includes(q)) score = 40;
+    if (score >= 0) scored.push({ ...b, score });
+  }
+  scored.sort((a, b) => b.score - a.score || a.code.localeCompare(b.code));
+  return scored.slice(0, limit);
+}
+
+const VA_BANK_DISPLAY = {
+  ACB: 'Ngan Hang TMCP A Chau',
+  BIDV: 'Ngan Hang Dau Tu & Phat Trien',
+  KLB: 'Ngan Hang TMCP Kien Long',
+  MB: 'Ngan Hang TMCP Quan Doi',
+  MSB: 'Ngan Hang TMCP Hang Hai Viet Nam',
+  STB: 'Ngan Hang TMCP Sai Gon Thuong Tin',
+  TCB: 'Ngan Hang TMCP Ky Thuong Viet Nam',
+  TPB: 'Ngan Hang TMCP Tien Phong',
+  VCB: 'Ngan Hang TMCP Ngoai Thuong Viet Nam',
+  VPB: 'Ngan Hang TMCP Viet Nam Thinh Vuong',
+};
+
+function formatDateVN(input) {
+  const raw = String(input || '').trim();
+  if (!raw) return '';
+  const num = Number(raw);
+  if (!Number.isFinite(num) || num <= 0) return raw;
+  const ms = raw.length >= 13 ? num : num * 1000;
+  const d = new Date(ms);
+  if (Number.isNaN(d.getTime())) return raw;
+  return new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Ho_Chi_Minh', day: '2-digit', month: '2-digit', year: 'numeric' }).format(d);
+}
+
+function displayVaBank(decoded, bankCode) {
+  const code = String(decoded?.vaBank || bankCode || '').trim().toUpperCase();
+  if (!code) return '';
+  return VA_BANK_DISPLAY[code] || code;
+}
+
 function menuKeyboard(ctx) {
   if (!bot) return null;
   const isAdmin = ctx && ctx.from && isAdminId(ctx.from.id);
   if (isAdmin) {
     return Markup.keyboard([
       ['🎲 Random tên', '✍️ Nhập tên'],
-      ['🔎 Trạng thái', '💸 Rút tiền', '🗂 VA đã tạo'],
+      ['🔎 Kiểm tra tài khoản', '💸 Rút tiền', '🗂 VA đã tạo'],
       ['ℹ️ Thông tin', '📋 DS rút', '🔄 Cập nhật rút'],
       ['⚙️ Quản lý', '🔑 Lấy token', '💰 Số dư'],
       ['🏧 Chi hộ']
@@ -38,13 +163,13 @@ function menuKeyboard(ctx) {
   }
   return Markup.keyboard([
     ['🎲 Random tên', '✍️ Nhập tên'],
-    ['🔎 Trạng thái', '💸 Rút tiền', '🗂 VA đã tạo'],
+    ['🔎 Kiểm tra tài khoản', '💸 Rút tiền', '🗂 VA đã tạo'],
     ['ℹ️ Thông tin']
   ]).resize();
 }
 
 function isMenuText(t) {
-  return t === '🎲 Random tên' || t === '✍️ Nhập tên' || t === '🔑 Lấy token' || t === '💰 Số dư' || t === '🔎 Trạng thái' || t === '💸 Rút tiền' || t === '📋 DS rút' || t === '🔄 Cập nhật rút' || t === '⚙️ Quản lý' || t === '🗂 VA đã tạo' || t === 'ℹ️ Thông tin' || t === '🏦 Bank' || t === '🪙 USDT' || t === 'Đã rút' || t === 'Chưa rút' || t === 'Từ chối' || t === 'Rút ALL' || t === '✅ Xác nhận tạo' || t === '✅ Xác nhận chi hộ' || t === '❌ Hủy' || t === '/menu' || t === '/start' || t === '🏧 Chi hộ' || t === '🏦 MSB' || t === '🏦 KLB' || t === '🏦 BIDV (BẢO TRÌ)';
+  return t === '🎲 Random tên' || t === '✍️ Nhập tên' || t === '🔑 Lấy token' || t === '💰 Số dư' || t === '🔎 Kiểm tra tài khoản' || t === '💸 Rút tiền' || t === '📋 DS rút' || t === '🔄 Cập nhật rút' || t === '⚙️ Quản lý' || t === '🗂 VA đã tạo' || t === 'ℹ️ Thông tin' || t === '🏦 Bank' || t === '🪙 USDT' || t === 'Đã rút' || t === 'Chưa rút' || t === 'Từ chối' || t === 'Rút ALL' || t === '✅ Xác nhận tạo' || t === '✅ Xác nhận chi hộ' || t === '❌ Hủy' || t === '/menu' || t === '/start' || t === '🏧 Chi hộ' || t === '🏦 MSB' || t === '🏦 KLB' || t === '🏦 BIDV (BẢO TRÌ)';
 }
 
 const app = express();
@@ -171,7 +296,7 @@ if (!bot) {
       await bot.telegram.setMyCommands([
         { command: 'start', description: 'Bắt đầu' },
         { command: 'menu', description: 'Mở menu thao tác' },
-        { command: 'status', description: 'Tra cứu trạng thái: /status <clientRequestId>' },
+        { command: 'status', description: 'Kiểm tra tài khoản: /status <clientRequestId>' },
         { command: 'id', description: 'Xem Telegram ID của bạn' },
         { command: 'users', description: '(Admin) Danh sách user' },
         { command: 'active', description: '(Admin) Kích hoạt user: /active <id>' },
@@ -256,17 +381,36 @@ if (!bot) {
       });
       if (decoded) {
         db.updateUser(ctx.from.id, { createdVA: user.createdVA + 1 });
-        const lines = [];
-        if (decoded.vaAccount) lines.push(`Số VA: ${decoded.vaAccount}`);
-        if (decoded.vaBank) lines.push(`Ngân hàng: ${decoded.vaBank}`);
-        if (decoded.vaName) lines.push(`Tên: ${decoded.vaName}`);
-        if (decoded.vaType) lines.push(`Loại: ${decoded.vaType}`);
-        if (decoded.vaCondition) lines.push(`Điều kiện: ${decoded.vaCondition}`);
-        if (decoded.vaAmount) lines.push(`Số tiền: ${decoded.vaAmount}`);
-        if (decoded.remark) lines.push(`Nội dung: ${decoded.remark}`);
-        if (decoded.expiredTime) lines.push(`Hết hạn: ${decoded.expiredTime}`);
-        lines.push(`ClientRequestId: ${requestId}`);
-        await ctx.reply(lines.join('\n'), menuKeyboard());
+        const staff = String(ctx.from.username || ctx.from.first_name || '')
+          .trim()
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '')
+          .replace(/[^A-Za-z0-9 ]+/g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim()
+          .toUpperCase()
+          .slice(0, 30);
+
+        const acctName = String(decoded.vaName || safeName || '')
+          .trim()
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '')
+          .replace(/[^A-Za-z0-9 ]+/g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim()
+          .toUpperCase()
+          .slice(0, 60);
+
+        const out = [];
+        out.push('✅ Tạo Virtual Account thành công (RUT)');
+        out.push('');
+        if (displayVaBank(decoded, bankCode)) out.push(`🏦 Ngân hàng: ${displayVaBank(decoded, bankCode)}`);
+        if (acctName) out.push(`👤 Tên tài khoản: ${acctName}`);
+        if (decoded.vaAccount) out.push(`💳 Số tài khoản: ${decoded.vaAccount}`);
+        if (staff) out.push(`👨‍💼 Mã NV: ${staff}`);
+        if (decoded.expiredTime) out.push(`📅 Hết hạn: ${formatDateVN(decoded.expiredTime)}`);
+        await ctx.reply(out.join('\n'), menuKeyboard(ctx));
+
         const s = requestStatus.get(requestId) || baseStatus;
         requestStatus.set(requestId, { ...s, vaAccount: decoded.vaAccount, vaBank: decoded.vaBank, amount: decoded.vaAmount });
         db.upsert({
@@ -283,16 +427,25 @@ if (!bot) {
           quickLink: decoded.quickLink,
           qrCode: decoded.qrCode,
         });
-        if (decoded.quickLink) {
-          await ctx.reply(`QuickLink:\n${decoded.quickLink}`);
-        } else if (decoded.qrCode) {
-          await ctx.reply(`QR Code:\n${decoded.qrCode}`);
+        const qrRaw = String(decoded.qrCode || decoded.quickLink || '').trim();
+        if (qrRaw) {
+          const lower = qrRaw.toLowerCase();
+          if (lower.startsWith('http://') || lower.startsWith('https://')) {
+            await ctx.replyWithPhoto({ url: qrRaw }, menuKeyboard(ctx));
+          } else if (lower.startsWith('data:image/')) {
+            const b64 = qrRaw.split(',')[1] || '';
+            const buf = Buffer.from(b64, 'base64');
+            if (buf.length) await ctx.replyWithPhoto({ source: buf }, menuKeyboard(ctx));
+          } else {
+            const buf = Buffer.from(qrRaw, 'base64');
+            if (buf.length) await ctx.replyWithPhoto({ source: buf }, menuKeyboard(ctx));
+          }
         }
       } else {
-        await ctx.reply(`Tạo VA không thành công.\nMã lỗi: ${raw.errorCode || 'N/A'}\nThông tin: ${raw.errorMessage || 'N/A'}`, menuKeyboard());
+        await ctx.reply(`Tạo VA không thành công.\nMã lỗi: ${raw.errorCode || 'N/A'}\nThông tin: ${raw.errorMessage || 'N/A'}`, menuKeyboard(ctx));
       }
     } catch (e) {
-      await ctx.reply(`Lỗi tạo VA: ${e.response?.data?.errorMessage || e.message}`, menuKeyboard());
+      await ctx.reply(`Lỗi tạo VA: ${e.response?.data?.errorMessage || e.message}`, menuKeyboard(ctx));
     }
   }
 
@@ -316,7 +469,7 @@ if (!bot) {
   });
 
   const MAIN_MENU_CMDS = [
-    '🎲 Random tên', '✍️ Nhập tên', '🔑 Lấy token', '💰 Số dư', '🔎 Trạng thái', 
+    '🎲 Random tên', '✍️ Nhập tên', '🔑 Lấy token', '💰 Số dư', '🔎 Kiểm tra tài khoản', 
     '💸 Rút tiền', '📋 DS rút', '🔄 Cập nhật rút', '⚙️ Quản lý', '🗂 VA đã tạo', 
     'ℹ️ Thông tin', '🏧 Chi hộ', '/menu', '/start'
   ];
@@ -353,7 +506,7 @@ if (!bot) {
     const guideMsg = `📌 HƯỚNG DẪN LẤY BANK (Cách sử dụng)\n\n` +
       `1️⃣ Nhấn "🎲 Random tên" để lấy nhanh một VA ngẫu nhiên.\n` +
       `2️⃣ Nhấn "✍️ Nhập tên" để tạo VA theo tên khách hàng mong muốn.\n` +
-      `3️⃣ Nhấn "🔎 Trạng thái" để kiểm tra giao dịch của VA.\n` +
+      `3️⃣ Nhấn "🔎 Kiểm tra tài khoản" để kiểm tra giao dịch của VA.\n` +
       `4️⃣ Nhấn "💸 Rút tiền" để yêu cầu rút số dư khả dụng.\n\n` +
       `Chào bạn! Vui lòng chọn thao tác bên dưới:`;
     
@@ -492,8 +645,8 @@ const ibftState = new Map();
     }
     ibftState.set(ctx.from.id, { stage: 'enter_bank' });
     await ctx.reply(
-      'Nhập mã ngân hàng (Ví dụ: MSB, KLB, BIDV...) hoặc chọn nhanh bên dưới:',
-      Markup.keyboard([['🏦 MSB', '🏦 KLB'], ['❌ Hủy']]).resize()
+      'Nhập mã ngân hàng hoặc gõ tên để tìm (Ví dụ: VCB hoặc vietcom). Chọn nhanh:',
+      Markup.keyboard([['🏦 MSB', '🏦 KLB'], ['🏦 VCB', '🏦 BIDV'], ['🏦 ACB', '🏦 TCB'], ['❌ Hủy']]).resize()
     );
   });
 
@@ -814,9 +967,9 @@ const ibftState = new Map();
     return lines.join('\n');
   }
 
-  bot.hears('🔎 Trạng thái', async (ctx) => {
+  bot.hears('🔎 Kiểm tra tài khoản', async (ctx) => {
     awaitingStatus.set(ctx.from.id, true);
-    await ctx.reply('Nhập clientRequestId để tra cứu:');
+    await ctx.reply('Nhập ClientRequestId để kiểm tra:');
   });
 
   bot.command('status', async (ctx) => {
@@ -824,7 +977,7 @@ const ibftState = new Map();
     const parts = txt.split(/\s+/);
     const id = parts[1];
     if (!id) {
-      await ctx.reply('Cú pháp: /status <clientRequestId>', menuKeyboard());
+      await ctx.reply('Cú pháp: /status <clientRequestId>', menuKeyboard(ctx));
       return;
     }
     await ctx.reply(formatStatus(id), menuKeyboard(ctx));
@@ -901,27 +1054,70 @@ const ibftState = new Map();
     }
     const ibft = ibftState.get(ctx.from.id);
     if (ibft) {
-      const allowBankPick =
-        ibft.stage === 'enter_bank' && (text === '🏦 MSB' || text === '🏦 KLB' || text === '🏦 BIDV (BẢO TRÌ)');
+      const allowBankPick = (ibft.stage === 'enter_bank' || ibft.stage === 'pick_bank') && text.trim().startsWith('🏦');
       if (isMenuText(text) && !allowBankPick) return next();
       if (ibft.stage === 'enter_bank') {
         let raw = text.trim();
         if (raw.startsWith('🏦')) raw = raw.replace(/^🏦\s*/i, '').trim();
-        raw = raw.replace(/\(.*\)$/g, '').trim();
-        const bankCode = raw
-          .normalize('NFD')
-          .replace(/[\u0300-\u036f]/g, '')
-          .replace(/[^A-Za-z0-9]/g, '')
-          .trim()
-          .toUpperCase()
-          .slice(0, 10);
+        const fromPick = raw.match(/^([A-Z0-9]+)\b/);
+        const query = (fromPick && fromPick[1]) ? fromPick[1] : raw;
+        const normalized = normalizeSearch(query);
 
-        if (!bankCode) {
-          await ctx.reply('Mã ngân hàng không hợp lệ. Nhập lại (Ví dụ: MSB, KLB, BIDV...):', Markup.keyboard([['🏦 MSB', '🏦 KLB'], ['❌ Hủy']]).resize());
+        if (!normalized) {
+          await ctx.reply(
+            'Mã/tên ngân hàng không hợp lệ. Nhập lại (Ví dụ: VCB hoặc vietcom):',
+            Markup.keyboard([['🏦 MSB', '🏦 KLB'], ['🏦 VCB', '🏦 BIDV'], ['🏦 ACB', '🏦 TCB'], ['❌ Hủy']]).resize()
+          );
           return;
         }
-        ibftState.set(ctx.from.id, { ...ibft, stage: 'enter_account', bankCode });
-        await ctx.reply('Nhập số tài khoản nhận:', Markup.keyboard([['❌ Hủy']]).resize());
+
+        const exact = IBFT_BANKS.find((b) => normalizeSearch(b.code) === normalized);
+        if (exact) {
+          ibftState.set(ctx.from.id, { ...ibft, stage: 'enter_account', bankCode: exact.code });
+          await ctx.reply(`Đã chọn ngân hàng: ${exact.code} - ${exact.name}\nNhập số tài khoản nhận:`, Markup.keyboard([['❌ Hủy']]).resize());
+          return;
+        }
+
+        const matches = findIbftBanks(query, 8);
+        if (!matches.length) {
+          await ctx.reply(
+            'Không tìm thấy ngân hàng. Bạn thử nhập mã (VCB, BIDV, ACB...) hoặc gõ tên (vietcom, techcom...):',
+            Markup.keyboard([['🏦 MSB', '🏦 KLB'], ['🏦 VCB', '🏦 BIDV'], ['🏦 ACB', '🏦 TCB'], ['❌ Hủy']]).resize()
+          );
+          return;
+        }
+
+        if (matches.length === 1) {
+          const b = matches[0];
+          ibftState.set(ctx.from.id, { ...ibft, stage: 'enter_account', bankCode: b.code });
+          await ctx.reply(`Đã chọn ngân hàng: ${b.code} - ${b.name}\nNhập số tài khoản nhận:`, Markup.keyboard([['❌ Hủy']]).resize());
+          return;
+        }
+
+        const buttons = matches.map((b) => `🏦 ${b.code} - ${b.name}`);
+        const rows = [];
+        for (let i = 0; i < buttons.length; i += 2) rows.push(buttons.slice(i, i + 2));
+        rows.push(['❌ Hủy']);
+        ibftState.set(ctx.from.id, { ...ibft, stage: 'pick_bank', bankMatches: matches.map((b) => b.code) });
+        await ctx.reply('Tìm thấy nhiều ngân hàng, vui lòng chọn:', Markup.keyboard(rows).resize());
+        return;
+      }
+
+      if (ibft.stage === 'pick_bank') {
+        const m = text.trim().match(/^🏦\s*([A-Z0-9]+)\b/);
+        const code = m ? m[1].trim().toUpperCase() : '';
+        const ok = code && Array.isArray(ibft.bankMatches) && ibft.bankMatches.includes(code);
+        const b = IBFT_BANKS.find((x) => x.code === code);
+        if (!ok || !b) {
+          ibftState.set(ctx.from.id, { stage: 'enter_bank' });
+          await ctx.reply(
+            'Lựa chọn không hợp lệ. Nhập lại mã ngân hàng hoặc gõ tên để tìm:',
+            Markup.keyboard([['🏦 MSB', '🏦 KLB'], ['🏦 VCB', '🏦 BIDV'], ['🏦 ACB', '🏦 TCB'], ['❌ Hủy']]).resize()
+          );
+          return;
+        }
+        ibftState.set(ctx.from.id, { ...ibft, stage: 'enter_account', bankCode: b.code, bankMatches: undefined });
+        await ctx.reply(`Đã chọn ngân hàng: ${b.code} - ${b.name}\nNhập số tài khoản nhận:`, Markup.keyboard([['❌ Hủy']]).resize());
         return;
       }
 
