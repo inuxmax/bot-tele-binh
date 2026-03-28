@@ -522,7 +522,7 @@ if (!bot) {
           bank: String(decoded.vaBank || bankCode || '').trim().toUpperCase(),
           amount: decoded.vaAmount,
           des: decoded.remark || remark,
-          template: 'compact',
+          template: 'qronly',
         });
 
         let sentQr = false;
@@ -548,10 +548,6 @@ if (!bot) {
           } catch (_) {}
         }
 
-        try {
-          const mk = menuKeyboard(ctx);
-          await ctx.reply(`QR URL: ${shortenUrl(sepayUrl)}\nMở QR: ${sepayUrl}`, { disable_web_page_preview: true, ...(mk || {}) });
-        } catch (_) {}
       } else {
         await ctx.reply(`Tạo VA không thành công.\nMã lỗi: ${raw.errorCode || 'N/A'}\nThông tin: ${raw.errorMessage || 'N/A'}`, menuKeyboard(ctx));
       }
