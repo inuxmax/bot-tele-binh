@@ -2487,8 +2487,7 @@ const ibftState = new Map();
       return;
     }
     const pending = db.getWithdrawals({ status: 'pending', limit: 10 });
-    const reject = db.getWithdrawals({ status: 'reject', limit: 10 });
-    if (!pending.length && !reject.length) {
+    if (!pending.length) {
       await ctx.reply('Chưa có yêu cầu rút tiền nào.', menuKeyboard(ctx));
       return;
     }
@@ -2542,15 +2541,12 @@ const ibftState = new Map();
       lines.push('⏳ *Đang chờ*');
       for (const w of pending) lines.push(fmt(w), '');
     }
-    if (reject.length) {
-      lines.push('❌ *Từ chối*');
-      for (const w of reject) lines.push(fmt(w), '');
-    }
     await ctx.replyWithMarkdown(lines.join('\n').trim(), menuKeyboard(ctx));
     await ctx.reply('📤 Xuất danh sách rút tiền:', {
       reply_markup: Markup.inlineKeyboard([
         [
           Markup.button.callback('⏳ Pending', 'wd_export:pending'),
+          Markup.button.callback('✅ Done', 'wd_export:done'),
           Markup.button.callback('❌ Reject', 'wd_export:reject'),
         ],
         [Markup.button.callback('📦 Xuất ALL', 'wd_export:all')],
@@ -2572,6 +2568,8 @@ const ibftState = new Map();
     const headers = [
       'id',
       'status',
+      'rejectReason',
+      'rejectNote',
       'createdAt',
       'createdAt_vn',
       'updatedAt',
@@ -2595,6 +2593,8 @@ const ibftState = new Map();
     const rows = filtered.map((w) => [
       String(w.id || ''),
       String(w.status || ''),
+      String(w.rejectReason || ''),
+      String(w.rejectNote || ''),
       String(Number(w.createdAt || 0) || 0),
       formatDateTimeVN(w.createdAt || ''),
       String(Number(w.updatedAt || 0) || 0),
@@ -2745,23 +2745,8 @@ const ibftState = new Map();
     if (!st || st.stage !== 'choose_status') return next();
     const w = db.getWithdrawalById(st.id);
     if (!w) return;
-    if (w.status !== 'reject') {
-       const u = db.getUser(w.userId);
-       const delta = Number(w.amount) || 0;
-       const after = u.balance + delta;
-       db.updateUser(w.userId, { balance: after }); // refund
-       try {
-         db.addUserBalanceHistory({ ts: Date.now(), userId: w.userId, delta, balanceAfter: after, reason: 'withdraw_refund', ref: w.id });
-       } catch (_) {}
-    }
-    db.updateWithdrawalStatus(st.id, 'reject', { rejectReason: 'admin_reject' });
-    awaitingWdUpdate.delete(ctx.from.id);
-    await ctx.reply(`Đã cập nhật ${st.id} → Từ chối (đã hoàn tiền).`, menuKeyboard(ctx));
-    if (w.userId) {
-      try {
-        await bot.telegram.sendMessage(w.userId, `Yêu cầu rút tiền ${w.id} đã bị từ chối và hoàn tiền.`);
-      } catch (_) {}
-    }
+    awaitingWdUpdate.set(ctx.from.id, { stage: 'enter_reject_reason', id: st.id });
+    await ctx.reply('Nhập lý do từ chối (ví dụ: sai STK/tên, ngân hàng lỗi...).', Markup.keyboard([['❌ Hủy']]).resize());
   });
 
   bot.hears('Từ chối sai STK/Tên', async (ctx, next) => {
@@ -2778,7 +2763,7 @@ const ibftState = new Map();
         db.addUserBalanceHistory({ ts: Date.now(), userId: w.userId, delta, balanceAfter: after, reason: 'withdraw_refund_wrong_info', ref: w.id });
       } catch (_) {}
     }
-    db.updateWithdrawalStatus(st.id, 'reject', { rejectReason: 'wrong_info' });
+    db.updateWithdrawalStatus(st.id, 'reject', { rejectReason: 'wrong_info', rejectNote: 'Sai STK/Tên người nhận' });
     awaitingWdUpdate.delete(ctx.from.id);
     await ctx.reply(`Đã cập nhật ${st.id} → Từ chối (sai STK/Tên) (đã hoàn tiền).`, menuKeyboard(ctx));
     if (w.userId) {
@@ -3106,6 +3091,38 @@ const ibftState = new Map();
           Markup.keyboard([['Đã rút', 'Chưa rút'], ['Từ chối', 'Từ chối sai STK/Tên'], ['❌ Hủy']]).resize()
         );
         upd(id);
+        return;
+      }
+      if (wdU.stage === 'enter_reject_reason') {
+        const id = wdU.id;
+        const w = db.getWithdrawalById(id);
+        if (!w) {
+          awaitingWdUpdate.delete(ctx.from.id);
+          await ctx.reply('ID không hợp lệ hoặc không tồn tại.', menuKeyboard(ctx));
+          return;
+        }
+        const reason = String(text || '').trim().replace(/\s+/g, ' ');
+        if (!reason) {
+          await ctx.reply('Lý do trống. Nhập lại lý do từ chối:', Markup.keyboard([['❌ Hủy']]).resize());
+          return;
+        }
+        if (w.status !== 'reject') {
+          const u = db.getUser(w.userId);
+          const delta = Number(w.amount) || 0;
+          const after = u.balance + delta;
+          db.updateUser(w.userId, { balance: after });
+          try {
+            db.addUserBalanceHistory({ ts: Date.now(), userId: w.userId, delta, balanceAfter: after, reason: 'withdraw_refund_reason', ref: w.id });
+          } catch (_) {}
+        }
+        db.updateWithdrawalStatus(id, 'reject', { rejectReason: 'admin_reject', rejectNote: reason });
+        awaitingWdUpdate.delete(ctx.from.id);
+        await ctx.reply(`Đã cập nhật ${id} → Từ chối (đã hoàn tiền).\nLý do: ${reason}`, menuKeyboard(ctx));
+        if (w.userId) {
+          try {
+            await bot.telegram.sendMessage(w.userId, `Yêu cầu rút tiền ${w.id} đã bị từ chối và hoàn tiền.\nLý do: ${reason}`);
+          } catch (_) {}
+        }
         return;
       }
     }
