@@ -402,7 +402,12 @@ function displayVaBank(decoded, bankCode) {
 async function sendQrImage(ctx, buf) {
   if (!buf || !buf.length) return false;
   try {
-    await ctx.replyWithPhoto({ source: buf }, menuKeyboard(ctx));
+    const caption = arguments.length >= 3 ? arguments[2] : '';
+    if (caption) {
+      await ctx.replyWithPhoto({ source: buf }, { caption: String(caption), parse_mode: 'Markdown', ...(menuKeyboard(ctx) || {}) });
+    } else {
+      await ctx.replyWithPhoto({ source: buf }, menuKeyboard(ctx));
+    }
     return true;
   } catch (_) {
     try {
@@ -791,7 +796,7 @@ if (!bot) {
   bot.command('id', async (ctx) => {
     await ctx.reply(`ID của bạn: ${ctx.from?.id || ''}`, menuKeyboard(ctx));
   });
-  async function handleCreateVA(ctx, name, bankCode) {
+  async function handleCreateVA(ctx, name, bankCode, remarkInput) {
     const user = db.getUser(ctx.from.id);
     if (!isAdminId(ctx.from.id) && user.vaLimit !== null && user.createdVA >= user.vaLimit) {
       await ctx.reply(`Bạn đã đạt giới hạn tạo VA (${user.vaLimit}). Vui lòng liên hệ Admin.`, menuKeyboard(ctx));
@@ -801,7 +806,8 @@ if (!bot) {
     const apiName = safeName.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim();
     const requestId = `${Date.now().toString().slice(-10)}${Math.floor(100000 + Math.random() * 900000).toString()}`.slice(0, 20);
     const rand = crypto.randomBytes(4).toString('hex').toUpperCase();
-    let remark = `ND ${requestId.slice(-6)} ${rand}`;
+    let remark = String(remarkInput || '').trim();
+    if (!remark || remark === '0') remark = `ND ${requestId.slice(-6)} ${rand}`;
     remark = remark
       .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
       .replace(/[^A-Za-z0-9 ]+/g, ' ')
@@ -889,6 +895,7 @@ if (!bot) {
           `🏦 Ngân hàng: *${escapeMd(bankDisp)}${escapeMd(bankSuffix)}*\n` +
           `👤 Tên tài khoản: *${escapeMd(acctName)}*\n` +
           `💳 Số tài khoản: *${escapeMd(decoded.vaAccount || '')}*\n` +
+          `📝 Nội dung: *${escapeMd(remark)}*\n` +
           `👨‍💼 User: *${escapeMd(staff)}*` +
           (decoded.expiredTime ? `\n📅 Hết hạn: ${escapeMd(formatDateVN(decoded.expiredTime))}` : '');
         await ctx.reply(msg, { parse_mode: 'Markdown', ...(menuKeyboard(ctx) || {}) });
@@ -929,7 +936,11 @@ if (!bot) {
           const ct = String(res.headers?.['content-type'] || '').toLowerCase();
           const buf = Buffer.from(res.data || []);
           if (buf.length > 200 && (ct.startsWith('image/') || sniffImageBuffer(buf))) {
-            sentQr = await sendQrImage(ctx, buf);
+            const cap =
+              `🏦 *${escapeMd(bankDisp)}${escapeMd(bankSuffix)}*\n` +
+              `💳 *${escapeMd(decoded.vaAccount || '')}*\n` +
+              `📝 *${escapeMd(remark)}*`;
+            sentQr = await sendQrImage(ctx, buf, cap);
           }
         } catch (_) {}
 
@@ -986,6 +997,7 @@ if (!bot) {
           withdrawState.delete(id);
           confirmCreateState.delete(id);
           bankSelectionState.delete(id);
+          vaContentState.delete(id);
           randomNameState.delete(id);
           awaitingWdUpdate.delete(id);
         }
@@ -1004,6 +1016,7 @@ if (!bot) {
         `2️⃣ Nhấn "✍️ Nhập tên" để tạo VA theo tên khách hàng mong muốn.\n` +
         `3️⃣ Nhấn "🔎 Kiểm tra tài khoản" để kiểm tra giao dịch của VA.\n` +
         `4️⃣ Nhấn "💸 Rút tiền" để yêu cầu rút số dư khả dụng.\n\n` +
+        `(Liên hệ admin để kích hoạt ID @lieunhuyenbet)\n\n` +
         `Chào bạn! Vui lòng chọn thao tác bên dưới:`;
       await ctx.reply(guideMsg, menuKeyboard(ctx));
     };
@@ -1020,6 +1033,7 @@ if (!bot) {
 
 const confirmCreateState = new Map();
 const bankSelectionState = new Map();
+const vaContentState = new Map();
 const randomNameState = new Map();
 const ibftState = new Map();
 
@@ -1028,6 +1042,7 @@ const ibftState = new Map();
     awaitingName.delete(id);
     confirmCreateState.delete(id);
     bankSelectionState.delete(id);
+    vaContentState.delete(id);
     randomNameState.delete(id);
     ibftState.delete(id);
     awaitingWdUpdate.delete(id);
@@ -1228,7 +1243,10 @@ const ibftState = new Map();
     try {
       await ctx.editMessageReplyMarkup(undefined);
     } catch (_) {}
-    await handleCreateVA(ctx, st.name, bank);
+    vaContentState.set(ctx.from.id, { name: st.name, bank });
+    await ctx.reply('Nhập nội dung chuyển khoản (ví dụ: ND 123456 ABC):', {
+      reply_markup: Markup.inlineKeyboard([[Markup.button.callback('❌ Hủy', 'cancel')]]).reply_markup,
+    });
   });
 
   bot.hears('🎲 Random tên', async (ctx) => {
@@ -1266,14 +1284,20 @@ const ibftState = new Map();
     const state = bankSelectionState.get(ctx.from.id);
     if (!state) return;
     bankSelectionState.delete(ctx.from.id);
-    await handleCreateVA(ctx, state.name, 'MSB');
+    vaContentState.set(ctx.from.id, { name: state.name, bank: 'MSB' });
+    await ctx.reply('Nhập nội dung chuyển khoản (ví dụ: ND 123456 ABC):', {
+      reply_markup: Markup.inlineKeyboard([[Markup.button.callback('❌ Hủy', 'cancel')]]).reply_markup,
+    });
   });
 
   bot.hears('🏦 KLB', async (ctx) => {
     const state = bankSelectionState.get(ctx.from.id);
     if (!state) return;
     bankSelectionState.delete(ctx.from.id);
-    await handleCreateVA(ctx, state.name, 'KLB');
+    vaContentState.set(ctx.from.id, { name: state.name, bank: 'KLB' });
+    await ctx.reply('Nhập nội dung chuyển khoản (ví dụ: ND 123456 ABC):', {
+      reply_markup: Markup.inlineKeyboard([[Markup.button.callback('❌ Hủy', 'cancel')]]).reply_markup,
+    });
   });
 
   bot.hears('🏦 BIDV (BẢO TRÌ)', async (ctx) => {
@@ -3147,6 +3171,17 @@ const ibftState = new Map();
         }
         return;
       }
+    }
+    const vaSt = vaContentState.get(ctx.from.id);
+    if (vaSt) {
+      if (isMenuText(text)) {
+        vaContentState.delete(ctx.from.id);
+        return next();
+      }
+      vaContentState.delete(ctx.from.id);
+      const content = String(text || '').trim().replace(/\s+/g, ' ');
+      await handleCreateVA(ctx, vaSt.name, vaSt.bank, content);
+      return;
     }
     const wst = withdrawState.get(ctx.from.id);
     if (wst) {
