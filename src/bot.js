@@ -969,7 +969,7 @@ if (!bot) {
         }
         if (ctx.message && ctx.message.text) {
           const name = ctx.from.first_name || ctx.from.username || 'User';
-          const msg = `🔒 TÀI KHOẢN CHƯA ĐƯỢC DUYỆT!\n\n━━━━━━━━━━━━━━━━━━━━\n🆔 User ID của bạn:\n\`${ctx.from.id}\`\n👤 Tên: ${name}\n━━━━━━━━━━━━━━━━━━━━\n\n📋 Hướng dẫn:\n1️⃣ Copy ID ở trên (nhấn vào số ID)\n2️⃣ Gửi ID cho Admin để được duyệt\n3️⃣ Đợi Admin duyệt, bot sẽ thông báo\n\n💡 Gõ /start để xem thông tin bot.`;
+          const msg = `🔒 TÀI KHOẢN CHƯA ĐƯỢC DUYỆT!\n\n━━━━━━━━━━━━━━━━━━━━\n🆔 User ID của bạn:\n\`${ctx.from.id}\`\n👤 Tên: ${name}\n━━━━━━━━━━━━━━━━━━━━\n\n📋 Hướng dẫn:\n1️⃣ Copy ID ở trên (nhấn vào số ID)\n2️⃣ Gửi ID cho Admin *@lieunhuyenbet* để được duyệt\n3️⃣ Đợi Admin duyệt, bot sẽ thông báo\n\n💡 Gõ /start để xem thông tin bot.`;
           await ctx.replyWithMarkdown(msg, Markup.removeKeyboard());
         }
         return;
@@ -1023,7 +1023,7 @@ if (!bot) {
       const u = db.getUser(ctx.from.id);
       if (!u.isActive) {
          const name = ctx.from.first_name || ctx.from.username || 'User';
-         const msg = `🔒 TÀI KHOẢN CHƯA ĐƯỢC DUYỆT!\n\n━━━━━━━━━━━━━━━━━━━━\n🆔 User ID của bạn:\n\`${ctx.from.id}\`\n👤 Tên: ${name}\n━━━━━━━━━━━━━━━━━━━━\n\n📋 Hướng dẫn:\n1️⃣ Copy ID ở trên (nhấn vào số ID)\n2️⃣ Gửi ID cho Admin để được duyệt\n3️⃣ Đợi Admin duyệt, bot sẽ thông báo\n\n💡 Gõ /start để xem thông tin bot.`;
+         const msg = `🔒 TÀI KHOẢN CHƯA ĐƯỢC DUYỆT!\n\n━━━━━━━━━━━━━━━━━━━━\n🆔 User ID của bạn:\n\`${ctx.from.id}\`\n👤 Tên: ${name}\n━━━━━━━━━━━━━━━━━━━━\n\n📋 Hướng dẫn:\n1️⃣ Copy ID ở trên (nhấn vào số ID)\n2️⃣ Gửi ID cho Admin *@lieunhuyenbet* để được duyệt\n3️⃣ Đợi Admin duyệt, bot sẽ thông báo\n\n💡 Gõ /start để xem thông tin bot.`;
          return ctx.replyWithMarkdown(msg, Markup.removeKeyboard());
       }
     }
