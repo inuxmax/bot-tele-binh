@@ -938,8 +938,7 @@ if (!bot) {
           if (buf.length > 200 && (ct.startsWith('image/') || sniffImageBuffer(buf))) {
             const cap =
               `🏦 *${escapeMd(bankDisp)}${escapeMd(bankSuffix)}*\n` +
-              `💳 *${escapeMd(decoded.vaAccount || '')}*\n` +
-              `📝 *${escapeMd(remark)}*`;
+              `💳 *${escapeMd(decoded.vaAccount || '')}*`;
             sentQr = await sendQrImage(ctx, buf, cap);
           }
         } catch (_) {}
