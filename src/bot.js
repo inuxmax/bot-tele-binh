@@ -37,6 +37,16 @@ function syncUsernameFromCtx(ctx) {
   } catch (_) {}
 }
 
+function displayWithdrawalId(id) {
+  return String(id || '').replace(/^WD/i, '').trim();
+}
+
+function copyNumber(n) {
+  const v = Number(n);
+  if (!Number.isFinite(v) || v <= 0) return '0';
+  return String(Math.floor(v));
+}
+
 function canUseIbft(id) {
   const allow = String(process.env.IBFT_ADMIN_IDS || '').trim();
   if (allow) {
@@ -2557,7 +2567,7 @@ const ibftState = new Map();
       const actual = Number(w.actualReceive) || Math.max(0, amt - feeFlat - feeByPercent);
       const lines = [];
       lines.push(`*${escapeMd(title)}*`);
-      lines.push(`🆔 ID: *${escapeMd(String(w.id || ''))}*`);
+      lines.push(`🆔 ID: *${escapeMd(displayWithdrawalId(w.id))}*`);
       lines.push(`👤 User: ${escapeMd(userLabel)}`);
       if (w.userId) lines.push(`🆔 User ID: ${escapeMd(String(w.userId))}`);
       lines.push(`💰 Số dư user: ${bal.toLocaleString()}đ`);
@@ -2707,7 +2717,39 @@ const ibftState = new Map();
       return;
     }
     awaitingWdUpdate.set(ctx.from.id, { stage: 'enter_id' });
-    await ctx.reply('Nhập ID rút tiền (ví dụ: WDxxxxxxxx):', Markup.keyboard([['❌ Hủy']]).resize());
+    await ctx.reply('Nhập ID rút tiền (ví dụ: 4845250540424981). (ID cũ có thể bắt đầu bằng WD)', Markup.keyboard([['❌ Hủy']]).resize());
+  });
+
+  bot.action(/^wd_copy:(net|acc|id):(.+)$/, async (ctx) => {
+    try {
+      await ctx.answerCbQuery();
+    } catch (_) {}
+    if (!isAdminId(ctx.from.id)) return;
+    const kind = String(ctx.match[1] || '');
+    const id = String(ctx.match[2] || '').trim();
+    const w = db.getWithdrawalById(id) || db.getWithdrawalById(`WD${id}`) || db.getWithdrawalById(String(id).replace(/^WD/i, ''));
+    if (!w) {
+      try {
+        await ctx.reply('Không tìm thấy lệnh rút này.', menuKeyboard(ctx));
+      } catch (_) {}
+      return;
+    }
+    if (kind === 'id') {
+      await ctx.reply(displayWithdrawalId(w.id), menuKeyboard(ctx));
+      return;
+    }
+    if (kind === 'acc') {
+      const acc = String(w.bankAccount || '').trim();
+      await ctx.reply(acc || 'N/A', menuKeyboard(ctx));
+      return;
+    }
+    const amount = Number(w.amount) || 0;
+    const feeFlat = Number(w.feeFlat) || 0;
+    const feePercent = w.feePercent === null || w.feePercent === undefined ? null : Number(w.feePercent) || 0;
+    const feeByPercent =
+      w.feeByPercent !== null && w.feeByPercent !== undefined ? Number(w.feeByPercent) || 0 : feePercent === null ? 0 : Math.floor((amount * feePercent) / 100);
+    const net = Number(w.actualReceive) || Math.max(0, amount - feeFlat - feeByPercent);
+    await ctx.reply(copyNumber(net), menuKeyboard(ctx));
   });
 
   bot.hears('Đã rút', async (ctx, next) => {
@@ -2728,7 +2770,7 @@ const ibftState = new Map();
        db.updateWithdrawalStatus(st.id, 'done');
     }
     awaitingWdUpdate.delete(ctx.from.id);
-    await ctx.reply(`Đã cập nhật ${st.id} → đã rút.`, menuKeyboard(ctx));
+    await ctx.reply(`Đã cập nhật ${displayWithdrawalId(st.id)} → đã rút.`, menuKeyboard(ctx));
     if (w.userId) {
       try {
         const amount = Number(w.amount) || 0;
@@ -2738,11 +2780,11 @@ const ibftState = new Map();
         const net = Number(w.actualReceive) || Math.max(0, amount - feeFlat - feeByPercent);
         const lines = [];
         lines.push('✅ Rút tiền thành công!');
-        lines.push(`🆔 ID: ${String(w.id || '').trim()}`);
+        lines.push(`🆔 ID: ${displayWithdrawalId(w.id)}`);
         lines.push(`💵 Số tiền rút: ${amount.toLocaleString()} đ`);
         lines.push(`💸 Phí chuyển: ${feeFlat.toLocaleString()} đ`);
         if (feePercent !== null) lines.push(`📉 Phí rút: ${feePercent}%`);
-        lines.push(`💰 Thực nhận: ${net.toLocaleString()} đ`);
+        lines.push(`💰 Thực nhận: ${net.toLocaleString()} đ (copy: ${copyNumber(net)})`);
         lines.push('');
         const method = String(w.method || '').toLowerCase();
         if (method === 'bank') {
@@ -2777,10 +2819,10 @@ const ibftState = new Map();
     }
     db.updateWithdrawalStatus(st.id, 'pending');
     awaitingWdUpdate.delete(ctx.from.id);
-    await ctx.reply(`Đã cập nhật ${st.id} → chưa rút (pending).`, menuKeyboard(ctx));
+    await ctx.reply(`Đã cập nhật ${displayWithdrawalId(st.id)} → chưa rút (pending).`, menuKeyboard(ctx));
     if (w.userId) {
       try {
-        await bot.telegram.sendMessage(w.userId, `Yêu cầu rút tiền ${w.id} đang chờ xử lý.`);
+        await bot.telegram.sendMessage(w.userId, `Yêu cầu rút tiền ${displayWithdrawalId(w.id)} đang chờ xử lý.`);
       } catch (_) {}
     }
   });
@@ -2810,10 +2852,10 @@ const ibftState = new Map();
     }
     db.updateWithdrawalStatus(st.id, 'reject', { rejectReason: 'wrong_info', rejectNote: 'Sai STK/Tên người nhận' });
     awaitingWdUpdate.delete(ctx.from.id);
-    await ctx.reply(`Đã cập nhật ${st.id} → Từ chối (sai STK/Tên) (đã hoàn tiền).`, menuKeyboard(ctx));
+    await ctx.reply(`Đã cập nhật ${displayWithdrawalId(st.id)} → Từ chối (sai STK/Tên) (đã hoàn tiền).`, menuKeyboard(ctx));
     if (w.userId) {
       try {
-        await bot.telegram.sendMessage(w.userId, `Yêu cầu rút tiền ${w.id} bị từ chối do sai STK hoặc tên người nhận và đã hoàn tiền. Vui lòng tạo lại yêu cầu rút.`);
+        await bot.telegram.sendMessage(w.userId, `Yêu cầu rút tiền ${displayWithdrawalId(w.id)} bị từ chối do sai STK hoặc tên người nhận và đã hoàn tiền. Vui lòng tạo lại yêu cầu rút.`);
       } catch (_) {}
     }
   });
@@ -3121,21 +3163,61 @@ const ibftState = new Map();
     if (wdU) {
       if (isMenuText(text)) return next();
       if (wdU.stage === 'enter_id') {
-        const id = text.trim();
-        const w = db.getWithdrawalById(id);
-        if (!id || !w) {
+        const raw = String(text || '').trim();
+        const cleaned = raw.replace(/\s+/g, '');
+        const candidates = [];
+        if (cleaned) candidates.push(cleaned);
+        if (cleaned && cleaned.toUpperCase().startsWith('WD')) candidates.push(cleaned.slice(2));
+        if (cleaned && !cleaned.toUpperCase().startsWith('WD')) candidates.push(`WD${cleaned}`);
+        let w = null;
+        let foundId = '';
+        for (const cid of candidates) {
+          const ww = db.getWithdrawalById(cid);
+          if (ww) {
+            w = ww;
+            foundId = cid;
+            break;
+          }
+        }
+        if (!w) {
           await ctx.reply('ID không hợp lệ hoặc không tồn tại. Nhập lại:', Markup.keyboard([['❌ Hủy']]).resize());
           return;
         }
+        const id = foundId || w.id;
+        const amt = Number(w.amount) || toAmountNumber(w.amount);
+        const feeFlat = Number(w.feeFlat) || 0;
+        const feePercent = w.feePercent === null || w.feePercent === undefined ? null : Number(w.feePercent) || 0;
+        const feeByPercent =
+          w.feeByPercent !== null && w.feeByPercent !== undefined ? Number(w.feeByPercent) || 0 : feePercent === null ? 0 : Math.floor((amt * feePercent) / 100);
+        const net = Number(w.actualReceive) || Math.max(0, amt - feeFlat - feeByPercent);
         await ctx.reply(
-          `ID: ${w.id}\nPhương thức: ${w.method}\n` +
+          `🆔 ID: ${displayWithdrawalId(w.id)}\n` +
+            `👤 User ID: ${w.userId || ''}\n` +
+            `📌 Phương thức: ${w.method}\n` +
             (w.method === 'bank'
               ? `Ngân hàng: ${w.bankName}\nSTK: ${w.bankAccount}\nChủ TK: ${w.bankHolder}\n`
               : `Network: ${w.network}\nVí: ${w.wallet}\n`) +
-            `Số tiền: ${w.amount}\nTrạng thái hiện tại: ${w.status}\nChọn trạng thái mới:`,
-          Markup.keyboard([['Đã rút', 'Chưa rút'], ['Từ chối', 'Từ chối sai STK/Tên'], ['❌ Hủy']]).resize()
+            `💵 Số tiền trừ: ${amt.toLocaleString()}đ\n` +
+            `💸 Phí chuyển: ${feeFlat.toLocaleString()}đ\n` +
+            (feePercent !== null ? `📉 Phí rút: ${feePercent}% (${feeByPercent.toLocaleString()}đ)\n` : '') +
+            `✅ Số tiền chi hộ (thực nhận): ${net.toLocaleString()}đ (copy: ${copyNumber(net)})\n` +
+            `Trạng thái hiện tại: ${w.status}\nChọn trạng thái mới:`,
+          {
+            reply_markup: Markup.keyboard([['Đã rút', 'Chưa rút'], ['Từ chối', 'Từ chối sai STK/Tên'], ['❌ Hủy']]).resize().reply_markup,
+          }
         );
-        upd(id);
+        try {
+          await ctx.reply('📋 Copy nhanh:', {
+            reply_markup: Markup.inlineKeyboard([
+              [Markup.button.callback('📋 Copy Thực nhận', `wd_copy:net:${w.id}`)],
+              [
+                Markup.button.callback('📋 Copy STK', `wd_copy:acc:${w.id}`),
+                Markup.button.callback('📋 Copy ID', `wd_copy:id:${w.id}`),
+              ],
+            ]).reply_markup,
+          });
+        } catch (_) {}
+        upd(w.id);
         return;
       }
       if (wdU.stage === 'enter_reject_reason') {
@@ -3162,10 +3244,10 @@ const ibftState = new Map();
         }
         db.updateWithdrawalStatus(id, 'reject', { rejectReason: 'admin_reject', rejectNote: reason });
         awaitingWdUpdate.delete(ctx.from.id);
-        await ctx.reply(`Đã cập nhật ${id} → Từ chối (đã hoàn tiền).\nLý do: ${reason}`, menuKeyboard(ctx));
+        await ctx.reply(`Đã cập nhật ${displayWithdrawalId(id)} → Từ chối (đã hoàn tiền).\nLý do: ${reason}`, menuKeyboard(ctx));
         if (w.userId) {
           try {
-            await bot.telegram.sendMessage(w.userId, `Yêu cầu rút tiền ${w.id} đã bị từ chối và hoàn tiền.\nLý do: ${reason}`);
+            await bot.telegram.sendMessage(w.userId, `Yêu cầu rút tiền ${displayWithdrawalId(w.id)} đã bị từ chối và hoàn tiền.\nLý do: ${reason}`);
           } catch (_) {}
         }
         return;
@@ -3260,7 +3342,7 @@ const ibftState = new Map();
         const feeByPercent = Math.floor((amount * Number(feePercent || 0)) / 100);
         const actualReceive = Math.max(0, amount - feeFlat - feeByPercent);
 
-        const id = `WD${Date.now().toString().slice(-10)}${Math.floor(100000 + Math.random() * 900000)}`;
+        const id = `${Date.now().toString().slice(-10)}${Math.floor(100000 + Math.random() * 900000)}`;
         const balanceAfter = balanceBefore - amount;
         db.updateUser(ctx.from.id, { balance: balanceAfter });
         try {
@@ -3309,7 +3391,7 @@ const ibftState = new Map();
             const userLabel = ctx.from.username ? `@${ctx.from.username}` : String(ctx.from.id);
             const msgAdmin =
               `🆕 Yêu cầu rút tiền mới\n\n` +
-              `🆔 ID: ${id}\n` +
+              `🆔 ID: ${displayWithdrawalId(id)}\n` +
               `👤 User: ${userLabel}\n` +
               `🆔 User ID: ${ctx.from.id}\n` +
               `💰 Số dư user: ${balanceBefore.toLocaleString()}đ\n\n` +
@@ -3319,8 +3401,16 @@ const ibftState = new Map();
               `💵 Số tiền trừ: ${amount.toLocaleString()}đ\n` +
               `💸 Phí chuyển: ${feeFlat.toLocaleString()}đ\n` +
               `📉 Phí rút: ${feePercent}%\n` +
-              `💰 Thực nhận: ${actualReceive.toLocaleString()}đ`;
-            await bot.telegram.sendMessage(aid, msgAdmin);
+              `💰 Thực nhận: ${actualReceive.toLocaleString()}đ (copy: ${copyNumber(actualReceive)})`;
+            await bot.telegram.sendMessage(aid, msgAdmin, {
+              reply_markup: Markup.inlineKeyboard([
+                [Markup.button.callback('📋 Copy Thực nhận', `wd_copy:net:${id}`)],
+                [
+                  Markup.button.callback('📋 Copy STK', `wd_copy:acc:${id}`),
+                  Markup.button.callback('📋 Copy ID', `wd_copy:id:${id}`),
+                ],
+              ]).reply_markup,
+            });
           } catch (_) {}
         }
         return;
