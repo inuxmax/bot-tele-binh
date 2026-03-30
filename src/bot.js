@@ -166,7 +166,7 @@ function formatDateTimeVN(input) {
 
 function computeUserBalanceFromRecords(userId) {
   const uid = String(userId);
-  const all = db.loadAll();
+  let all = db.loadAll();
   try {
     const vaToUser = new Map();
     for (const r of all) {
@@ -174,13 +174,19 @@ function computeUserBalanceFromRecords(userId) {
       const u = String(r.userId || '').trim();
       if (acc && u) vaToUser.set(acc, u);
     }
+    let changed = false;
     for (const r of all) {
       if (String(r.status) !== 'paid') continue;
       if (r.userId) continue;
       const acc = String(r.vaAccount || '').trim();
       const u = vaToUser.get(acc);
-      if (acc && u) db.upsert({ requestId: r.requestId, userId: u });
+      if (acc && u) {
+        db.upsert({ requestId: r.requestId, userId: u });
+        r.userId = u;
+        changed = true;
+      }
     }
+    if (changed) all = db.loadAll();
   } catch (_) {}
   const vas = all.filter((r) => String(r.userId) === uid && String(r.status) === 'paid');
   const totalPaid = vas.reduce((sum, r) => sum + toAmountNumber(r.netAmount || r.amount || r.vaAmount), 0);
