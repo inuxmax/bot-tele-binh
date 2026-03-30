@@ -1717,6 +1717,7 @@ const ibftState = new Map();
       `/balhist [n] : Xem lịch sử số dư admin\n` +
       `/user <id> : Xem thông tin user\n` +
       `/uhist <id> [n] : Xem lịch sử số dư user\n` +
+      `/uhistexport <id> : Xuất excel lịch sử số dư user\n` +
       `/setlimit <id> <số> : Set giới hạn VA cho user\n` +
       `/users : Xem danh sách user\n` +
       `/usersexport : Xuất excel user\n` +
@@ -2550,7 +2551,84 @@ const ibftState = new Map();
       const ref = String(it.ref || '');
       return `${ts} | ${sign}${delta.toLocaleString()}đ | ${bal.toLocaleString()}đ${reason ? ` | ${reason}` : ''}${ref ? ` | ${ref}` : ''}`;
     });
-    await ctx.reply(`Lịch sử số dư user ${id} (mới nhất):\n${lines.join('\n')}`, menuKeyboard(ctx));
+    await ctx.reply(`Lịch sử số dư user ${id} (mới nhất):\n${lines.join('\n')}`, {
+      reply_markup: Markup.inlineKeyboard([[Markup.button.callback('📤 Xuất Excel', `uhist_export:${id}`)]]).reply_markup,
+    });
+  });
+
+  bot.action(/^uhist_export:(.+)$/, async (ctx) => {
+    try {
+      await ctx.answerCbQuery();
+    } catch (_) {}
+    if (!isAdminId(ctx.from.id)) return;
+    const id = String(ctx.match[1] || '').trim();
+    if (!id) return;
+    try {
+      const items = db.getUserBalanceHistory(id, 200);
+      if (!items.length) {
+        await ctx.reply('Chưa có lịch sử số dư user này.', menuKeyboard(ctx));
+        return;
+      }
+      const headers = ['ts', 'datetime_vn', 'delta', 'balanceAfter', 'reason', 'ref'];
+      const rows = items
+        .slice()
+        .sort((a, b) => (Number(a.ts) || 0) - (Number(b.ts) || 0))
+        .map((it) => [
+          String(Number(it.ts) || 0),
+          formatDateTimeVN(it.ts),
+          String(Number(it.delta) || 0),
+          String(Number(it.balanceAfter) || 0),
+          String(it.reason || ''),
+          String(it.ref || ''),
+        ]);
+      const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+      const filename = `uhist_${String(id).replace(/[^\d]/g, '') || id}_${stamp}.csv`.replace(/[^\w.-]/g, '_');
+      const filePath = writeCsvFile(filename, headers, rows);
+      await bot.telegram.sendDocument(ctx.chat.id, { source: fs.createReadStream(filePath), filename }, { caption: `Xuất lịch sử số dư user ${id}: ${rows.length} dòng` });
+      try {
+        fs.unlinkSync(filePath);
+      } catch (_) {}
+    } catch (e) {
+      await ctx.reply(`Lỗi xuất excel uhist: ${e.message}`, menuKeyboard(ctx));
+    }
+  });
+
+  bot.command('uhistexport', async (ctx) => {
+    if (!isAdminId(ctx.from.id)) return;
+    const parts = String(ctx.message?.text || '').trim().split(/\s+/);
+    const id = String(parts[1] || '').trim();
+    if (!id) {
+      await ctx.reply('Cú pháp: /uhistexport <id>', menuKeyboard(ctx));
+      return;
+    }
+    try {
+      const items = db.getUserBalanceHistory(id, 200);
+      if (!items.length) {
+        await ctx.reply('Chưa có lịch sử số dư user này.', menuKeyboard(ctx));
+        return;
+      }
+      const headers = ['ts', 'datetime_vn', 'delta', 'balanceAfter', 'reason', 'ref'];
+      const rows = items
+        .slice()
+        .sort((a, b) => (Number(a.ts) || 0) - (Number(b.ts) || 0))
+        .map((it) => [
+          String(Number(it.ts) || 0),
+          formatDateTimeVN(it.ts),
+          String(Number(it.delta) || 0),
+          String(Number(it.balanceAfter) || 0),
+          String(it.reason || ''),
+          String(it.ref || ''),
+        ]);
+      const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+      const filename = `uhist_${String(id).replace(/[^\d]/g, '') || id}_${stamp}.csv`.replace(/[^\w.-]/g, '_');
+      const filePath = writeCsvFile(filename, headers, rows);
+      await bot.telegram.sendDocument(ctx.chat.id, { source: fs.createReadStream(filePath), filename }, { caption: `Xuất lịch sử số dư user ${id}: ${rows.length} dòng` });
+      try {
+        fs.unlinkSync(filePath);
+      } catch (_) {}
+    } catch (e) {
+      await ctx.reply(`Lỗi xuất excel uhist: ${e.message}`, menuKeyboard(ctx));
+    }
   });
 
 
