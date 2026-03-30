@@ -186,9 +186,25 @@ function computeUserBalanceFromRecords(userId) {
         changed = true;
       }
     }
+    // Mở rộng: gắn userId cho mọi bản ghi PAID thuộc các VA mà user đã tạo
+    const myAccounts = new Set(all.filter((r) => String(r.userId) === uid && String(r.vaAccount || '').trim()).map((r) => String(r.vaAccount).trim()));
+    for (const r of all) {
+      if (String(r.status) !== 'paid') continue;
+      const acc = String(r.vaAccount || '').trim();
+      if (!r.userId && acc && myAccounts.has(acc)) {
+        db.upsert({ requestId: r.requestId, userId: uid });
+        r.userId = uid;
+        changed = true;
+      }
+    }
     if (changed) all = db.loadAll();
   } catch (_) {}
-  const vas = all.filter((r) => String(r.userId) === uid && String(r.status) === 'paid');
+  const myAccounts = new Set(all.filter((r) => String(r.userId) === uid && String(r.vaAccount || '').trim()).map((r) => String(r.vaAccount).trim()));
+  const vas = all.filter(
+    (r) =>
+      String(r.status) === 'paid' &&
+      (String(r.userId) === uid || (String(r.vaAccount || '').trim() && myAccounts.has(String(r.vaAccount).trim())))
+  );
   const totalPaid = vas.reduce((sum, r) => sum + toAmountNumber(r.netAmount || r.amount || r.vaAmount), 0);
   const wds = db.loadWithdrawals().filter((w) => String(w.userId) === uid && String(w.status) !== 'reject');
   const totalWithdraw = wds.reduce((sum, w) => sum + toAmountNumber(w.amount), 0);
