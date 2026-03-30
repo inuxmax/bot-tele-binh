@@ -2594,7 +2594,7 @@ const ibftState = new Map();
       const rejectReason = String(w.rejectReason || '').trim().toLowerCase();
       const title =
         status === 'pending'
-          ? '🆕 Yêu cầu rút tiền mới'
+          ? '🆕 YÊU CẦU RÚT TIỀN MỚI'
           : status === 'done'
             ? '✅ Rút tiền thành công'
             : status === 'reject' && rejectReason === 'wrong_info'
@@ -3234,24 +3234,32 @@ const ibftState = new Map();
         const feeByPercent =
           w.feeByPercent !== null && w.feeByPercent !== undefined ? Number(w.feeByPercent) || 0 : feePercent === null ? 0 : Math.floor((amt * feePercent) / 100);
         const net = Number(w.actualReceive) || Math.max(0, amt - feeFlat - feeByPercent);
-        await ctx.reply(
-          `🆔 ID: ${displayWithdrawalId(w.id)}\n` +
-            `👤 User ID: ${w.userId || ''}\n` +
-            `📌 Phương thức: ${w.method}\n` +
-            (w.method === 'bank'
-              ? `Ngân hàng: ${w.bankName}\nSTK: ${w.bankAccount}\nChủ TK: ${w.bankHolder}\n`
-              : `Network: ${w.network}\nVí: ${w.wallet}\n`) +
-            `💵 Số tiền trừ: ${amt.toLocaleString()}đ\n` +
-            `💸 Phí chuyển: ${feeFlat.toLocaleString()}đ\n` +
-            (feePercent !== null ? `📉 Phí rút: ${feePercent}% (${feeByPercent.toLocaleString()}đ)\n` : '') +
-            `✅ Số tiền chi hộ (thực nhận): ${net.toLocaleString()}đ (copy: ${copyNumber(net)})\n` +
-            `Trạng thái hiện tại: ${w.status}\nChọn trạng thái mới:`,
-          {
-            reply_markup: Markup.keyboard([['Đã rút', 'Chưa rút'], ['Từ chối', 'Từ chối sai STK/Tên'], ['❌ Hủy']]).resize().reply_markup,
-          }
-        );
+        const userLabel = w.username ? `@${String(w.username).trim()}` : String(w.userId || '').trim();
+        const lines = [];
+        lines.push('*CẬP NHẬT RÚT TIỀN*');
+        lines.push('');
+        lines.push(`🆔 ID: *${escapeMd(displayWithdrawalId(w.id))}*`);
+        lines.push(`👤 USER: ${escapeMd(userLabel)}`);
+        if (w.userId) lines.push(`🆔 User ID: ${escapeMd(String(w.userId))}`);
+        lines.push(`📌 PHƯƠNG THỨC: ${escapeMd(String(w.method || '').toUpperCase())}`);
+        if (String(w.method || '').toLowerCase() === 'bank') {
+          lines.push(`🏦 NGÂN HÀNG: ${escapeMd(String(w.bankName || '').trim())}`);
+          lines.push(`💳 STK: \`${escapeMd(String(w.bankAccount || '').trim())}\``);
+          lines.push(`👤 CHỦ TK: ${escapeMd(String(w.bankHolder || '').trim().toUpperCase())}`);
+        } else {
+          lines.push(`🌐 NETWORK: ${escapeMd(String(w.network || '').trim().toUpperCase())}`);
+          lines.push(`👛 VÍ: \`${escapeMd(String(w.wallet || '').trim())}\``);
+        }
+        lines.push(`💰 SỐ TIỀN: *${escapeMd(net.toLocaleString())}đ*`);
+        lines.push('');
+        lines.push(`Trạng thái hiện tại: ${escapeMd(String(w.status || ''))}`);
+        lines.push('Chọn trạng thái mới:');
+        await ctx.reply(lines.join('\n'), {
+          parse_mode: 'Markdown',
+          reply_markup: Markup.keyboard([['Đã rút', 'Chưa rút'], ['Từ chối', 'Từ chối sai STK/Tên'], ['❌ Hủy']]).resize().reply_markup,
+        });
         try {
-          await ctx.reply('📋 Copy nhanh:', {
+          await ctx.reply(' ', {
             reply_markup: Markup.inlineKeyboard([
               [Markup.button.callback('📋 Copy Thực nhận', `wd_copy:net:${w.id}`)],
               [
@@ -3434,7 +3442,7 @@ const ibftState = new Map();
           try {
             const userLabel = ctx.from.username ? `@${ctx.from.username}` : String(ctx.from.id);
             const msgAdmin =
-              `🆕 Yêu cầu rút tiền mới\n\n` +
+              `*🆕 YÊU CẦU RÚT TIỀN MỚI*\n\n` +
               `🆔 ID: ${displayWithdrawalId(id)}\n` +
               `👤 User: ${userLabel}\n` +
               `🆔 User ID: ${ctx.from.id}\n` +
@@ -3447,6 +3455,7 @@ const ibftState = new Map();
               `📉 Phí rút: ${feePercent}%\n` +
               `💰 Thực nhận: ${actualReceive.toLocaleString()}đ (copy: ${copyNumber(actualReceive)})`;
             await bot.telegram.sendMessage(aid, msgAdmin, {
+              parse_mode: 'Markdown',
               reply_markup: Markup.inlineKeyboard([
                 [Markup.button.callback('📋 Copy Thực nhận', `wd_copy:net:${id}`)],
                 [
