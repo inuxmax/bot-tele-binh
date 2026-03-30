@@ -166,7 +166,23 @@ function formatDateTimeVN(input) {
 
 function computeUserBalanceFromRecords(userId) {
   const uid = String(userId);
-  const vas = db.loadAll().filter((r) => String(r.userId) === uid && String(r.status) === 'paid');
+  const all = db.loadAll();
+  try {
+    const vaToUser = new Map();
+    for (const r of all) {
+      const acc = String(r.vaAccount || '').trim();
+      const u = String(r.userId || '').trim();
+      if (acc && u) vaToUser.set(acc, u);
+    }
+    for (const r of all) {
+      if (String(r.status) !== 'paid') continue;
+      if (r.userId) continue;
+      const acc = String(r.vaAccount || '').trim();
+      const u = vaToUser.get(acc);
+      if (acc && u) db.upsert({ requestId: r.requestId, userId: u });
+    }
+  } catch (_) {}
+  const vas = all.filter((r) => String(r.userId) === uid && String(r.status) === 'paid');
   const totalPaid = vas.reduce((sum, r) => sum + toAmountNumber(r.netAmount || r.amount || r.vaAmount), 0);
   const wds = db.loadWithdrawals().filter((w) => String(w.userId) === uid && String(w.status) !== 'reject');
   const totalWithdraw = wds.reduce((sum, w) => sum + toAmountNumber(w.amount), 0);
@@ -604,6 +620,13 @@ app.get('/va/callback', async (req, res) => {
         if (candidates.length) rec = { ...candidates[0], ...rec };
       } catch (_) {}
     }
+    const chatId = requestToChat.get(clientRequestId);
+    if (!rec.userId && chatId && Number.isFinite(Number(chatId))) {
+      rec = { ...rec, userId: String(chatId) };
+      try {
+        db.upsert({ requestId: clientRequestId, userId: String(chatId) });
+      } catch (_) {}
+    }
     const gross = toAmountNumber(amount);
     const cfg = db.getConfig();
     let feeFlat = Math.max(0, Number(cfg.ipnFeeFlat || 0) || 0);
@@ -666,7 +689,6 @@ app.get('/va/callback', async (req, res) => {
     }
 
     const targetUserId = rec.userId ? String(rec.userId) : '';
-    const chatId = requestToChat.get(clientRequestId);
     const target = targetUserId || chatId;
     if (target && !alreadyProcessed) {
       const owner = String(rec.name || rec.customerName || '').trim().toUpperCase();
